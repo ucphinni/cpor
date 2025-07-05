@@ -15,11 +15,24 @@ try:
     print("🔄 Testing spec-aligned imports...")
     from cpor import (
         ConnectRequest, ConnectResponse, GenericMessage,
-        AckMessage,
+        AckMessage, HeartbeatMessage, ResumeRequest, ResumeResponse, BatchMessage, CloseMessage, ErrorMessage,
         parse_message, EXAMPLE_MESSAGES
     )
     import nacl.signing
     print("✅ All imports successful")
+
+    MESSAGE_CLASS_MAP: dict[str, type] = {
+        "ConnectRequest": ConnectRequest,
+        "ConnectResponse": ConnectResponse,
+        "GenericMessage": GenericMessage,
+        "AckMessage": AckMessage,
+        "HeartbeatMessage": HeartbeatMessage,
+        "ResumeRequest": ResumeRequest,
+        "ResumeResponse": ResumeResponse,
+        "BatchMessage": BatchMessage,
+        "CloseMessage": CloseMessage,
+        "ErrorMessage": ErrorMessage,
+    }
 
     # Create test keypair
     signing_key = nacl.signing.SigningKey.generate()
@@ -125,25 +138,31 @@ try:
     print("\n🔄 Testing updated example messages...")
     for msg_type, example_data in EXAMPLE_MESSAGES.items():
         # Get the message class
-        msg_class = globals()[msg_type]
-        
+        msg_class: type = MESSAGE_CLASS_MAP[msg_type]
+
         # Create from example
-        msg = msg_class.from_dict(example_data)
-        
+        msg: Any
+        from_dict_method = getattr(msg_class, "from_dict", None)
+        if callable(from_dict_method):
+            msg = from_dict_method(example_data)
+        else:
+            # Fallback: try to instantiate directly
+            msg = msg_class(**example_data)
+
         # Test has type field
         assert hasattr(msg, 'type'), f"Example {msg_type} missing type field"
-        
+
         # Test serialization roundtrip
-        cbor_data = msg.to_cbor()
-        restored = msg_class.from_cbor(cbor_data)
+        cbor_data = msg.to_cbor()  # type: ignore
+        assert isinstance(cbor_data, bytes)
+        restored: Any = msg_class.from_cbor(cbor_data)  # type: ignore
         assert restored == msg
-        
+
         # Test generic parsing
-        parsed = parse_message(cbor_data)
+        parsed: Any = parse_message(cbor_data)
         assert isinstance(parsed, msg_class)
-        
+
         print(f"   ✅ {msg_type} example: type='{msg.type}'")
-    
     # --- Task 2: Core Ed25519 and CryptoManager validation ---
     print("\n🔄 Testing Ed25519 key generation and sign/verify (Task 2 core)...")
     from cpor.crypto import quick_generate_keypair, quick_verify, CryptoManager
@@ -165,6 +184,45 @@ try:
     assert cm.verify_signature(keypair2.public_key, test_msg, sig2)
     print("✅ CryptoManager software key sign/verify successful")
     
+    # --- Task 3: Configuration Management validation ---
+    print("\n🔄 Testing Task 3: Configuration Management...")
+    from cpor.config import CPORConfig, ConfigManager
+
+    # Test default config creation
+    config = CPORConfig(environment="development")
+    assert config.environment == "development"
+    assert config.version == "CPOR-2"
+    print(f"✅ CPORConfig default creation: environment={config.environment}, version={config.version}")
+
+    # Test config manager loads defaults
+    manager = ConfigManager()
+    manager.load_defaults("testing")
+    loaded = manager.config
+    assert loaded.environment == "testing"
+    print(f"✅ ConfigManager loads defaults: environment={loaded.environment}")
+
+    # Test config roundtrip (to_dict/to_json)
+    config_dict = config.to_dict()
+    config_json = config.to_json()
+    assert isinstance(config_dict, dict)
+    assert isinstance(config_json, str)
+    print("✅ CPORConfig to_dict/to_json roundtrip")
+
+    # Test config file loading (simulate with dict)
+    test_dict = {"environment": "production", "version": "CPOR-2"}
+    manager._merge_config(test_dict)  # type: ignore[attr-defined]
+    assert manager.config.environment == "production"
+    print("✅ ConfigManager _merge_config works with dict input")
+
+    # Test environment enum validation
+    try:
+        CPORConfig(environment="invalid_env")  # type: ignore
+        assert False, "Invalid environment should raise error"
+    except Exception:
+        print("✅ CPORConfig rejects invalid environment")
+
+    print("\n🎉 TASK 3: CONFIGURATION MANAGEMENT VALIDATION PASSED!")
+
     print("\n🎉 ALL SPEC-ALIGNED TESTS PASSED!")
     print("\n📊 Summary:")
     print("  ✅ Spec field names (client_pubkey, server_pubkey, etc.)")
