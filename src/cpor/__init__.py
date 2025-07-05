@@ -36,6 +36,28 @@ from .messages import (
     SerializationError,
 )
 
+from .config import (
+    # Configuration classes
+    CPORConfig,
+    ConfigManager,
+    NetworkConfig,
+    CryptoConfig,
+    LoggingConfig,
+    SecurityConfig,
+    PerformanceConfig,
+    
+    # Configuration utilities
+    load_config,
+    get_config_manager,
+    set_config_manager,
+    EXAMPLE_CONFIGS,
+    
+    # Configuration exceptions
+    CPORConfigError,
+    ConfigValidationError,
+    ConfigLoadError,
+)
+
 __all__ = [
     # Version info
     "__version__",
@@ -59,9 +81,29 @@ __all__ = [
     "AckMessage",
     "ErrorMessage",
     
-    # Exceptions
+    # Message exceptions
     "CPORMessageError",
     "InvalidMessageError",
     "SignatureError",
     "SerializationError",
+    
+    # Configuration classes
+    "CPORConfig",
+    "ConfigManager",
+    "NetworkConfig",
+    "CryptoConfig",
+    "LoggingConfig",
+    "SecurityConfig",
+    "PerformanceConfig",
+    
+    # Configuration utilities
+    "load_config",
+    "get_config_manager",
+    "set_config_manager",
+    "EXAMPLE_CONFIGS",
+    
+    # Configuration exceptions
+    "CPORConfigError",
+    "ConfigValidationError",
+    "ConfigLoadError",
 ]

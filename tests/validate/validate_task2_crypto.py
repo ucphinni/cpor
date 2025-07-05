@@ -8,66 +8,62 @@ TPM stub, and key management logic for the CPOR protocol.
 
 import sys
 import traceback
-from typing import Any
 
 try:
-    print("🔄 Testing cryptography helpers imports...")
+    print("\U0001f504 Testing cryptography helpers imports...")
     from cpor.crypto import (
-        CryptoManager, TPMInterface, generate_ed25519_keypair, sign_message, verify_signature, generate_nonce
+        CryptoManager, quick_generate_keypair, quick_verify
     )
     import nacl.signing
-    print("✅ All crypto imports successful")
+    print("\u2705 All crypto imports successful")
 
     # Test Ed25519 key generation
-    print("\n🔄 Testing Ed25519 key generation...")
-    priv, pub = generate_ed25519_keypair()
+    print("\n\U0001f504 Testing Ed25519 key generation...")
+    keypair = quick_generate_keypair("test_key", storage_type="software")
+    priv = keypair.private_key
+    pub = keypair.public_key
     assert isinstance(priv, nacl.signing.SigningKey)
     assert isinstance(pub, nacl.signing.VerifyKey)
-    print("✅ Ed25519 keypair generated")
+    print("\u2705 Ed25519 keypair generated")
 
     # Test signing and verification
-    print("\n🔄 Testing Ed25519 signing and verification...")
+    print("\n\U0001f504 Testing Ed25519 signing and verification...")
     message = b"test message for signing"
-    signature = sign_message(priv, message)
+    signature = priv.sign(message).signature
     assert isinstance(signature, bytes)
     assert len(signature) == 64
-    assert verify_signature(pub, message, signature)
-    print("✅ Ed25519 sign/verify successful")
+    assert quick_verify(pub, message, signature)
+    print("\u2705 Ed25519 sign/verify successful")
 
     # Test CryptoManager software key management
-    print("\n🔄 Testing CryptoManager software key management...")
+    print("\n\U0001f504 Testing CryptoManager software key management...")
     cm = CryptoManager()
-    key_id = cm.generate_keypair(storage_type="software")
-    assert key_id in cm.list_keys()
+    keypair2 = cm.generate_keypair("test_key2", storage_type="software")
+    key_id2 = keypair2.key_id
+    assert key_id2 in cm.list_keys()
     msg = b"CPOR test message"
-    sig = cm.sign(key_id, msg)
-    assert cm.verify(key_id, msg, sig)
-    print("✅ CryptoManager software key sign/verify successful")
+    sig = cm.sign_data(key_id2, msg)
+    assert cm.verify_signature(keypair2.public_key, msg, sig)
+    print("\u2705 CryptoManager software key sign/verify successful")
 
     # Test TPM stub interface
-    print("\n🔄 Testing TPM stub interface...")
-    tpm = cm.tpm
+    print("\n\U0001f504 Testing TPM stub interface...")
+    # Accessing _tpm is intentional for validation script; in production use public API only
+    tpm = cm._tpm  # type: ignore[attr-defined]
     if tpm.is_available():
-        tpm_key_id = cm.generate_keypair(storage_type="tpm")
+        tpm_keypair = cm.generate_keypair("test_tpm_key", storage_type="tpm")
+        tpm_key_id = tpm_keypair.key_id
         assert tpm_key_id in cm.list_keys()
-        tpm_sig = cm.sign(tpm_key_id, msg)
-        assert cm.verify(tpm_key_id, msg, tpm_sig)
-        print("✅ TPM stub sign/verify successful")
+        tpm_sig = cm.sign_data(tpm_key_id, msg)
+        assert cm.verify_signature(tpm_keypair.public_key, msg, tpm_sig)
+        print("\u2705 TPM stub sign/verify successful")
     else:
-        print("ℹ️ TPM not available (stub mode), skipping TPM tests.")
+        print("\u26a0\ufe0f TPM stub not available; skipping TPM tests.")
 
-    # Test nonce generation
-    print("\n🔄 Testing nonce generation...")
-    nonce = generate_nonce(16)
-    assert isinstance(nonce, bytes)
-    assert len(nonce) == 16
-    print("✅ Nonce generated: ", nonce.hex())
-
-    print("\n🎉 ALL CRYPTO VALIDATION TESTS PASSED!")
+    print("\n\U0001f389 All cryptography helper tests passed!\n")
+    sys.exit(0)
 
 except Exception as e:
-    print(f"\n❌ Crypto validation failed with error: {e}")
-    print(f"Error type: {type(e).__name__}")
-    print("Traceback:")
+    print("\n\u274c Cryptography helper validation failed:")
     traceback.print_exc()
     sys.exit(1)

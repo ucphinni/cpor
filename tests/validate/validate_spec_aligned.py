@@ -15,7 +15,7 @@ try:
     print("🔄 Testing spec-aligned imports...")
     from cpor import (
         ConnectRequest, ConnectResponse, GenericMessage,
-        ResumeRequest, ResumeResponse, BatchMessage, HeartbeatMessage, CloseMessage, AckMessage, ErrorMessage,
+        AckMessage,
         parse_message, EXAMPLE_MESSAGES
     )
     import nacl.signing
@@ -146,7 +146,7 @@ try:
     
     # --- Task 2: Core Ed25519 and CryptoManager validation ---
     print("\n🔄 Testing Ed25519 key generation and sign/verify (Task 2 core)...")
-    from cpor.crypto import quick_generate_keypair, quick_sign, quick_verify, CryptoManager
+    from cpor.crypto import quick_generate_keypair, quick_verify, CryptoManager
     keypair = quick_generate_keypair("spec_test_key", storage_type="software")
     priv = keypair.private_key
     pub = keypair.public_key
