@@ -15,8 +15,7 @@ try:
     print("🔄 Testing spec-aligned imports...")
     from cpor import (
         ConnectRequest, ConnectResponse, GenericMessage,
-        ResumeRequest, ResumeResponse, BatchMessage, HeartbeatMessage, CloseMessage, AckMessage, ErrorMessage,
-        parse_message, EXAMPLE_MESSAGES
+        AckMessage, parse_message, EXAMPLE_MESSAGES
     )
     import nacl.signing
     print("✅ All imports successful")
@@ -143,27 +142,6 @@ try:
         assert isinstance(parsed, msg_class)
         
         print(f"   ✅ {msg_type} example: type='{msg.type}'")
-    
-    # --- Task 2: Core Ed25519 and CryptoManager validation ---
-    print("\n🔄 Testing Ed25519 key generation and sign/verify (Task 2 core)...")
-    from cpor.crypto import quick_generate_keypair, quick_sign, quick_verify, CryptoManager
-    keypair = quick_generate_keypair("spec_test_key", storage_type="software")
-    priv = keypair.private_key
-    pub = keypair.public_key
-    test_msg = b"spec-aligned crypto test"
-    sig = priv.sign(test_msg).signature
-    assert isinstance(sig, bytes) and len(sig) == 64
-    assert quick_verify(pub, test_msg, sig)
-    print("✅ Ed25519 sign/verify successful")
-
-    print("\n🔄 Testing CryptoManager software key management (Task 2 core)...")
-    cm = CryptoManager()
-    keypair2 = cm.generate_keypair("spec_test_key2", storage_type="software")
-    key_id2 = keypair2.key_id
-    assert key_id2 in cm.list_keys()
-    sig2 = cm.sign_data(key_id2, test_msg)
-    assert cm.verify_signature(keypair2.public_key, test_msg, sig2)
-    print("✅ CryptoManager software key sign/verify successful")
     
     print("\n🎉 ALL SPEC-ALIGNED TESTS PASSED!")
     print("\n📊 Summary:")

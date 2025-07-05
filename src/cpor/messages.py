@@ -85,12 +85,14 @@ class BaseMessage:
         try:
             decoded = cbor2.loads(data)
             if not isinstance(decoded, dict):
-                raise InvalidMessageError("CBOR data must be a dictionary")
+                raise SerializationError("Failed to decode CBOR data: CBOR data must be a dictionary")
             # Cast to proper type for type checker
             decoded_dict = cast(Dict[str, Any], decoded)
             return cls.from_dict(decoded_dict)
         except cbor2.CBORDecodeError as e:
             raise SerializationError(f"Failed to decode CBOR data: {e}")
+        except InvalidMessageError:
+            raise  # Let InvalidMessageError propagate for test compatibility
         except Exception as e:
             raise SerializationError(f"Failed to deserialize message from CBOR: {e}")
     
@@ -171,9 +173,11 @@ class ConnectRequest(BaseMessage):
         
         if self.key_storage is not None and self.key_storage not in ["tpm", "software"]:
             raise InvalidMessageError("key_storage must be 'tpm' or 'software'")
-        
         if self.resume_sequence < 0:
             raise InvalidMessageError("resume_sequence must be a non-negative integer")
+        # Enforce capabilities must be a list
+        if not isinstance(self.capabilities, list): # type: ignore
+            raise InvalidMessageError("capabilities must be a list")
 
 
 @dataclass(frozen=True)
@@ -253,6 +257,9 @@ class GenericMessage(BaseMessage):
         
         if not self.message_type:
             raise InvalidMessageError("message_type must be a non-empty string")
+        
+        if not isinstance(self.payload, bytes):
+            raise InvalidMessageError("payload must be bytes")
 
 
 @dataclass(frozen=True)
@@ -516,22 +523,17 @@ def parse_message(cbor_data: bytes) -> BaseMessage:
     try:
         data = cbor2.loads(cbor_data)
         if not isinstance(data, dict):
-            raise InvalidMessageError("CBOR data must be a dictionary")
-        
-        # Cast to proper type for type checker
+            raise SerializationError("Failed to decode CBOR data: CBOR data must be a dictionary")
         data_dict = cast(Dict[str, Any], data)
-        
-        # Determine message type from the data structure
         message_type = _infer_message_type(data_dict)
         message_class = MESSAGE_TYPES.get(message_type)
-        
         if not message_class:
             raise InvalidMessageError(f"Unknown message type: {message_type}")
-        
         return message_class.from_dict(data_dict)
-    
     except cbor2.CBORDecodeError as e:
         raise SerializationError(f"Failed to decode CBOR data: {e}")
+    except InvalidMessageError:
+        raise  # Let InvalidMessageError propagate for test compatibility
     except Exception as e:
         raise SerializationError(f"Failed to parse message: {e}")
 
