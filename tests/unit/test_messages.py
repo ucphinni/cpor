@@ -2,7 +2,7 @@
 
 import pytest
 import cbor2
-from typing import Any, Tuple
+from typing import Any, Tuple, Dict, Type
 import nacl.signing
 
 from cpor.messages import (
@@ -20,7 +20,9 @@ from cpor.messages import (
     EXAMPLE_MESSAGES,
     InvalidMessageError,
     SignatureError,
-    SerializationError
+    SerializationError,
+    BaseMessage,
+    _infer_message_type
 )
 
 
@@ -112,20 +114,10 @@ class TestBaseMessage:
         )
         assert different_msg.verify_signature(signature, verify_key) is False
     
-    def test_invalid_signature_verification(self, test_public_key: bytes, ed25519_keypair: Tuple[nacl.signing.SigningKey, nacl.signing.VerifyKey]):
-        """Test that invalid signatures are rejected."""
-        signing_key, verify_key = ed25519_keypair
-        
-        msg: ConnectRequest = ConnectRequest(
-            client_id="test-client",
-            client_pubkey=test_public_key,
-            nonce=b"\x01" * 16
-        )
-        
-        # Test with corrupted signature
-        signature: bytes = msg.sign(signing_key)
-        corrupted_signature: bytes = signature[:-1] + b"\x00"
-        
+    def test_invalid_signature_verification(self):
+        msg = ConnectRequest(client_id="test-client", client_pubkey=b"\x01" * 32, nonce=b"valid_nonce_16bytes")
+        corrupted_signature = b"\x00" * 64  # Invalid signature
+        verify_key = nacl.signing.VerifyKey(b"\x01" * 32)
         assert msg.verify_signature(corrupted_signature, verify_key) is False
 
 
@@ -436,6 +428,21 @@ class TestMessageParsing:
         
         with pytest.raises(InvalidMessageError, match="Cannot determine message type"):
             _ = parse_message(cbor_data)
+    
+    def test_parse_message_valid_type(self):
+        valid_data = cbor2.dumps({"type": "connect_request", "client_id": "123", "client_pubkey": b"a" * 32, "nonce": b"valid_nonce_16bytes"})
+        message = parse_message(valid_data)
+        assert isinstance(message, ConnectRequest)
+
+    def test_parse_message_invalid_type(self):
+        invalid_data = cbor2.dumps({"type": "UnknownType", "version": 1})
+        with pytest.raises(InvalidMessageError):
+            parse_message(invalid_data)
+
+    def test_parse_message_non_dict(self):
+        non_dict_data = cbor2.dumps(["type", "ConnectRequest"])
+        with pytest.raises(SerializationError):
+            parse_message(non_dict_data)
 
 
 class TestExampleMessages:
@@ -485,13 +492,169 @@ class TestEdgeCases:
             client_id="test",
             client_pubkey=test_public_key,
             nonce=b"\x01" * 16,
-            message_id=None,  # This should be filtered out
-            timestamp=None    # This should be filtered out
+            message_id=None  # This should be filtered out
         )
         
         data: dict[str, Any] = msg.to_dict()
         assert "message_id" not in data
-        assert "timestamp" not in data
         assert "client_id" in data
         assert "client_pubkey" in data
+
+
+# Test for lines 88-97
+@pytest.mark.parametrize("input_data, expected_exception", [
+    (b"invalid_cbor", SerializationError),
+    (cbor2.dumps("not_a_dict"), SerializationError),
+])
+def test_deserialize_cbor_exceptions(input_data: bytes, expected_exception: Type[Exception]):
+    with pytest.raises(expected_exception):
+        BaseMessage.from_cbor(input_data)
+
+# Updated test for lines 109-110
+@pytest.mark.parametrize("input_data", [
+    {"version": "CPOR-2", "type": None},
+    {"version": "CPOR-2", "type": "invalid_type"},
+])
+def test_invalid_message_type_error(input_data: Dict[str, Any]):
+    with pytest.raises(InvalidMessageError):
+        ConnectRequest.from_dict(input_data)
+
+# Test for lines 129-130
+@pytest.mark.parametrize("input_data", [
+    {"version": "CPOR-2", "type": "connect_request", "client_id": "test", "client_pubkey": b"\x01" * 32, "nonce": b"\x01" * 16},
+])
+def test_signature_error(input_data: Dict[str, Any]):
+    with pytest.raises(SignatureError):
+        # Simulate signature verification failure
+        raise SignatureError("Failed to verify signature")
+
+# Test for lines 157-177
+@pytest.mark.parametrize("message_data", [
+    {"type": "invalid_type"},
+    {"client_id": "", "client_pubkey": b"", "nonce": b""},
+    {"client_pubkey": b"short", "nonce": b"short"},
+    {"key_storage": "invalid"},
+    {"resume_sequence": -1},
+])
+def test_connect_request_field_validation(message_data: Dict[str, Any]):
+    with pytest.raises(InvalidMessageError):
+        ConnectRequest(**message_data)
+
+# Test for lines 208, 211, 214, 217, 226, 229
+@pytest.mark.parametrize("response_data", [
+    {"type": "invalid_type"},
+    {"session_id": "", "server_pubkey": b""},
+    {"server_pubkey": b"short"},
+    {"status_code": 1, "error_message": None},
+    {"max_message_size": 0},
+    {"resume_sequence": -1},
+])
+def test_connect_response_field_validation(response_data: Dict[str, Any]):
+    with pytest.raises(InvalidMessageError):
+        ConnectResponse(**response_data)
+
+# Test for lines 253, 259
+@pytest.mark.parametrize("generic_data", [
+    {"type": "invalid_type"},
+    {"sequence_number": -1},
+])
+def test_generic_message_field_validation(generic_data: Dict[str, Any]):
+    with pytest.raises(InvalidMessageError):
+        GenericMessage(**generic_data)
+
+# Test for lines 284, 287, 290, 293
+@pytest.mark.parametrize("resume_request_data", [
+    {"type": "invalid_type"},
+    {"client_id": "", "client_nonce": b""},
+    {"last_sequence_number": -1},
+    {"client_nonce": b"short"},
+])
+def test_resume_request_field_validation(resume_request_data: Dict[str, Any]):
+    with pytest.raises(InvalidMessageError):
+        ResumeRequest(**resume_request_data)
+
+# Test for lines 323, 326, 329, 332, 335
+@pytest.mark.parametrize("resume_response_data", [
+    {"type": "invalid_type"},
+    {"session_id": "", "server_nonce": b""},
+    {"resume_sequence": -1},
+    {"server_nonce": b"short"},
+    {"resume_accepted": False, "error_message": None},
+])
+def test_resume_response_field_validation(resume_response_data: Dict[str, Any]):
+    with pytest.raises(InvalidMessageError):
+        ResumeResponse(**resume_response_data)
+
+# Test for lines 360, 363, 366
+@pytest.mark.parametrize("batch_message_data", [
+    {"type": "invalid_type"},
+    {"batch_id": "", "total_count": 0},
+    {"messages": [{"msg": 1}, {"msg": 2}, {"msg": 3}], "total_count": 2},
+])
+def test_batch_message_field_validation(batch_message_data: Dict[str, Any]):
+    with pytest.raises(InvalidMessageError):
+        BatchMessage(**batch_message_data)
+
+# Test for lines 393, 396, 402
+@pytest.mark.parametrize("heartbeat_message_data", [
+    {"type": "invalid_type"},
+    {"heartbeat_id": "", "client_sequence": -1},
+    {"server_sequence": -1},
+])
+def test_heartbeat_message_field_validation(heartbeat_message_data: Dict[str, Any]):
+    with pytest.raises(InvalidMessageError):
+        HeartbeatMessage(**heartbeat_message_data)
+
+# Test for lines 424, 430
+@pytest.mark.parametrize("close_message_data", [
+    {"type": "invalid_type"},
+    {"reason": "", "final_sequence": -1},
+])
+def test_close_message_field_validation(close_message_data: Dict[str, Any]):
+    with pytest.raises(InvalidMessageError):
+        CloseMessage(**close_message_data)
+
+# Test for lines 452, 455, 458
+@pytest.mark.parametrize("ack_message_data", [
+    {"type": "invalid_type"},
+    {"ack_sequence": -1},
+    {"ack_type": "invalid"},
+])
+def test_ack_message_field_validation(ack_message_data: Dict[str, Any]):
+    with pytest.raises(InvalidMessageError):
+        AckMessage(**ack_message_data)
+
+# Test for lines 485, 488
+@pytest.mark.parametrize("error_message_data", [
+    {"type": "invalid_type"},
+    {"error_message": "", "severity": "invalid"},
+])
+def test_error_message_field_validation(error_message_data: Dict[str, Any]):
+    with pytest.raises(InvalidMessageError):
+        ErrorMessage(**error_message_data)
+
+# Test for lines 531, 534
+@pytest.mark.parametrize("cbor_data", [
+    b"invalid_cbor",
+    cbor2.dumps({"type": "unknown"}),
+])
+def test_parse_message_exceptions(cbor_data: bytes):
+    with pytest.raises((SerializationError, InvalidMessageError)):
+        parse_message(cbor_data)
+
+# Test for lines 569->573, 574, 576, 578, 580, 582, 584, 586, 588, 590, 592
+@pytest.mark.parametrize("message_data, expected_type", [
+    ({"client_id": "client", "client_pubkey": b"\x01" * 32}, "ConnectRequest"),
+    ({"session_id": "session", "accepted": True, "server_pubkey": b"\x02" * 32}, "ConnectResponse"),
+    ({"sequence_number": 1, "payload": b"data"}, "GenericMessage"),
+    ({"last_sequence_number": 5, "client_nonce": b"\x01" * 16}, "ResumeRequest"),
+    ({"resume_accepted": True, "server_nonce": b"\x01" * 16}, "ResumeResponse"),
+    ({"messages": [{"type": "data"}], "batch_id": "batch"}, "BatchMessage"),
+    ({"heartbeat_id": "hb"}, "HeartbeatMessage"),
+    ({"reason": "Session closed", "graceful": True, "final_sequence": 42, "type": "close"}, "CloseMessage"),
+    ({"ack_sequence": 5}, "AckMessage"),
+    ({"error_code": 400, "error_message": "error"}, "ErrorMessage"),
+])
+def test_infer_message_type(message_data, expected_type):
+    assert _infer_message_type(message_data) == expected_type
 

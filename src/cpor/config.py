@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union, Literal
 import yaml
 from pydantic import BaseModel, Field, field_validator, ValidationError
+import warnings
 
 logger = logging.getLogger(__name__)
 
@@ -54,8 +55,9 @@ class NetworkConfig(BaseModel):
     buffer_size: int = Field(default=8192, ge=512, description="Network buffer size in bytes")
     
     @field_validator('host')
-    def validate_host(cls, v: str) -> str:
-        """Validate host address."""
+    def validate_and_normalize_host(cls, v: str) -> str:
+        """Validate and normalize host address."""
+        v = v.strip()
         if not v:
             raise ValueError("Host must be a non-empty string")
         return v
@@ -198,16 +200,14 @@ class CPORConfig(BaseModel):
         """Post-initialization validation and setup."""
         # Environment-specific adjustments
         if self.environment == "production":
-            # Production defaults
             if self.debug:
-                logger.warning("Debug mode enabled in production environment")
-            if self.logging.level in ["DEBUG"]:
-                logger.warning("Debug logging enabled in production environment")
-        
+                warnings.warn("Debug mode enabled in production environment", UserWarning)
+            if self.logging.level == "DEBUG":
+                warnings.warn("Debug logging enabled in production environment", UserWarning)
+
         elif self.environment == "development":
-            # Development defaults
             self.debug = True
-            if self.logging.level not in ["DEBUG", "INFO"]:
+            if self.logging.level != "DEBUG":
                 self.logging.level = "DEBUG"
     
     def to_dict(self) -> Dict[str, Any]:
@@ -253,6 +253,7 @@ class ConfigManager:
             config: Optional pre-loaded configuration
         """
         self._config = config or CPORConfig()
+        self._config.__post_init_post_parse__()
         self._config_sources: List[str] = []
         logger.info(f"ConfigManager initialized for environment: {self._config.environment}")
     
