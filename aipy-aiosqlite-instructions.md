@@ -1,6 +1,6 @@
 # Async Database Instructions (SQLite) for GitHub Copilot Chat
 
-You are an AI assistant that writes **correct, idiomatic, and testable async SQLite database code** in Python. These instructions assume the Async Core instructions are also in use, so unit testing, type hints, and general async correctness are inherited.
+You are an AI assistant that writes **correct, idiomatic, and testable async SQLite database code** in Python. These instructions **assume [aipy-core-instructions.md](aipy-core-instructions.md) is also in use**, so unit testing style, type hints, cancellation handling, and general async correctness are inherited **and not repeated here**.
 
 ---
 
@@ -11,25 +11,54 @@ You are an AI assistant that writes **correct, idiomatic, and testable async SQL
 - Avoid blocking the event loop.
 - Use **aiosqlite** as the preferred async SQLite driver.
 - Always close cursors or use `async with` context managers.
-- Use explicit transactions with `async with` blocks.
-- Provide explicit type hints for query inputs and outputs.
+- Use **explicit transactions** with `async with` blocks.
+- Provide **explicit type hints** for query inputs and outputs.
 - Write **unit tests** with **pytest-asyncio** alongside code.
-- Add reasonable **timeouts** for queries where applicable.
+- Add **reasonable timeouts** for queries where applicable.
 
 ---
 
 ## ✅ SQLite: Use aiosqlite Driver
 
-- Use **aiosqlite** connection context managers to open and close connections efficiently.
-- Use `async with aiosqlite.connect(...)` for connection lifecycle.
-- Use `async with conn.execute(...)` for queries.
-- Use transactions with `async with conn.transaction()` or explicit `BEGIN/COMMIT` commands.
-- Always commit changes explicitly with `await conn.commit()` when modifying data.
-- Map rows explicitly using `dict(row)` by enabling `row_factory`.
+- Use **aiosqlite connection context managers** to open and close connections efficiently.
+- Use:
+
+~~~~python
+async with aiosqlite.connect(...) as db:
+    ...
+~~~~
+
+- Use:
+
+~~~~python
+async with db.execute(...) as cursor:
+    ...
+~~~~
+
+- For transactions, use:
+
+~~~~python
+await db.execute("BEGIN")
+# or
+async with db.transaction():
+    ...
+~~~~
+
+- Always **commit changes explicitly**:
+
+~~~~python
+await db.commit()
+~~~~
+
+- Enable `row_factory` and **map rows explicitly**:
+
+~~~~python
+db.row_factory = aiosqlite.Row
+~~~~
 
 **Example:**
 
-```
+~~~~python
 import aiosqlite
 from typing import Optional, Dict
 
@@ -41,41 +70,47 @@ async def get_user_by_id(db_path: str, user_id: int) -> Optional[Dict]:
             if row:
                 return dict(row)
             return None
-```
+~~~~
 
 ---
 
 ## ✅ Stored Procedures and Functions (SQLite Context)
 
-- SQLite supports limited user-defined functions (UDFs), but no stored procedures.
-- Complex logic should be handled in application code, not DB.
-- Use SQLite functions and triggers sparingly.
-- Document any use of triggers or UDFs carefully.
-- Write tests covering all DB interactions and logic.
+- SQLite supports **limited user-defined functions (UDFs)** but no stored procedures.
+- Complex logic should stay in **application code**, not in the DB.
+- Use **SQLite functions and triggers sparingly**.
+- Document any use of **triggers** or **UDFs** carefully.
+- Write tests covering all DB interactions and **business logic**.
 
 ---
 
 ## ✅ Connection and Resource Management
 
-- Open and close connections efficiently using async context managers.
+- Open and close connections efficiently using **async context managers**.
 - Avoid holding connections open longer than necessary.
 - Always close cursors properly using `async with` blocks.
-- Use connection pooling only if implemented outside (e.g., via external tools) — `aiosqlite` does not provide pooling.
+- Connection pooling is not built-in; if needed, implement externally.
 
 ---
 
 ## ✅ Timeout Management
 
-- SQLite via aiosqlite does not natively support query timeouts.
-- Implement external timeout logic if needed via `asyncio.wait_for()`.
+- **aiosqlite** does not natively support query timeouts.
+- Implement **external timeout logic** via `asyncio.wait_for()`:
+
+~~~~python
+await asyncio.wait_for(db.execute(...), timeout=5)
+~~~~
+
 - Be cautious with long-running queries blocking the event loop.
 
 ---
 
 ## ✅ Exception Handling and Logging
 
-- Catch `aiosqlite.Error` and related exceptions explicitly.
-- Log with context, avoid swallowing exceptions.
+- Catch **aiosqlite.Error** and related exceptions explicitly.
+- Log exceptions with **context** to aid debugging.
+- Avoid broad excepts that swallow tracebacks.
 - Fail fast on unrecoverable errors.
 - Use `try/except` blocks around DB calls as needed.
 
@@ -83,30 +118,35 @@ async def get_user_by_id(db_path: str, user_id: int) -> Optional[Dict]:
 
 ## ✅ Async Generators for Large Result Sets
 
-- Use async generators or cursor iteration to process results incrementally.
+- Use **async generators** or cursor iteration to process large results incrementally.
 - Avoid reading large query results fully into memory.
 
 **Example:**
 
-```
+~~~~python
 async def stream_users(db_path: str):
     async with aiosqlite.connect(db_path) as db:
         db.row_factory = aiosqlite.Row
         async with db.execute("SELECT * FROM users") as cursor:
             async for row in cursor:
                 yield dict(row)
-```
+~~~~
 
 ---
 
 ## ✅ Unit Testing Async DB Code
 
 - Use **pytest-asyncio** for async test functions.
-- Use a separate test SQLite DB file or in-memory DB.
-- Use fixtures to setup/teardown DB state between tests.
+- Use a **separate test SQLite DB file** or **in-memory DB**:
+
+~~~~python
+":memory:"
+~~~~
+
+- Use **fixtures** to setup/teardown DB state between tests.
 - Mock DB calls if needed with **AsyncMock**.
-- Keep tests minimal, clear, and deterministic.
-- Aim for **100% test coverage** on DB layers.
+- Keep tests **minimal, clear, and deterministic**.
+- Aim for **100% test coverage** on the DB layer.
 
 ---
 
@@ -114,7 +154,11 @@ async def stream_users(db_path: str):
 
 ### 1. Explicit Row Mapping
 
-- Always convert rows to dict or objects explicitly with `dict(row)` after setting `row_factory`.
+- Always convert rows to dicts or objects with:
+
+~~~~python
+dict(row)
+~~~~
 
 ### 2. Context Management
 
@@ -122,23 +166,29 @@ async def stream_users(db_path: str):
 
 ### 3. Commit Discipline
 
-- Always call `await conn.commit()` after write operations.
+- Always call:
+
+~~~~python
+await conn.commit()
+~~~~
+
+after write operations.
 
 ### 4. Await Discipline
 
-- Never forget to `await` async DB calls.
+- Never forget to **await** async DB calls.
 
 ### 5. Exception Handling
 
-- Catch and handle `aiosqlite.Error` explicitly.
+- Catch and handle **aiosqlite.Error** explicitly.
 
 ### 6. Resource Management
 
-- Close connections and cursors promptly.
+- Close connections and cursors promptly with **async with**.
 
 ### 7. Async Iteration
 
-- Use async iteration over cursors for large datasets.
+- Use **async iteration** over cursors for large datasets.
 
 ### 8. Timeout Awareness
 
@@ -146,23 +196,23 @@ async def stream_users(db_path: str):
 
 ### 9. Test DB Setup
 
-- Use isolated DB files or in-memory DB for tests.
+- Use isolated DB files or **in-memory DB** for tests.
 
 ### 10. Mocking Async DB Calls
 
-- Use `AsyncMock` in tests and always await mocks.
+- Use **AsyncMock** in tests and always **await** mocks.
 
 ---
 
 ## ✅ Summary
 
-- Use **aiosqlite** with async context managers for SQLite access.  
-- Set `row_factory` to `aiosqlite.Row` and convert rows explicitly.  
-- Commit transactions explicitly with `await conn.commit()`.  
-- Use async generators to stream large results.  
-- Handle exceptions and close resources carefully.  
-- Write full **pytest-asyncio** tests with fixtures and mocks.  
-- Always `await` async calls.  
-- Timeout handling is external via `asyncio.wait_for()`.  
-- Complex logic should stay out of DB (SQLite lacks stored procs).  
-- Ensure clear type hints and consistent async patterns.  
+- Use **aiosqlite** with **async context managers** for SQLite access.  
+- Set **row_factory** to `aiosqlite.Row` and convert rows explicitly.  
+- Commit transactions explicitly with **await conn.commit()**.  
+- Use **async generators** to stream large results.  
+- Handle **exceptions** and close resources carefully.  
+- Write full **pytest-asyncio** tests with **fixtures and mocks**.  
+- Always **await** async calls.  
+- Timeout handling is external via **asyncio.wait_for()**.  
+- Keep complex logic in **application code** (SQLite lacks stored procedures).  
+- Ensure **clear type hints** and consistent **async patterns**.
