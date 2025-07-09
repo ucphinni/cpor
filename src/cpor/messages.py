@@ -16,6 +16,7 @@ from typing import Any, Dict, List, Optional, Type, TypeVar, cast
 import cbor2
 import nacl.signing
 from nacl.exceptions import BadSignatureError
+import typing
 
 # Type variable for message classes
 T = TypeVar('T', bound='BaseMessage')
@@ -102,9 +103,31 @@ class BaseMessage:
         try:
             # Filter out unknown fields and None values
             valid_fields: Dict[str, Any] = {}
-            for field_name in cls.__dataclass_fields__:
-                if field_name in data and data[field_name] is not None:
-                    valid_fields[field_name] = data[field_name]
+            for field_name, field_def in cls.__dataclass_fields__.items():
+                if field_name in data:
+                    value = data[field_name]
+                    expected_type = field_def.type
+
+                    # Handle cases where expected_type is not directly usable with isinstance
+                    if isinstance(expected_type, str):
+                        # Convert string type hints to actual types
+                        expected_type = eval(expected_type, globals(), locals())
+                    elif hasattr(expected_type, '__origin__'):
+                        # Handle subscripted generics
+                        origin = typing.get_origin(expected_type)
+                        args = typing.get_args(expected_type)
+                        if not isinstance(value, origin):
+                            raise InvalidMessageError(f"Invalid message data: {field_name} must be of type {origin}")
+                        if args:
+                            for arg in args:
+                                if not all(isinstance(elem, arg) for elem in value):
+                                    raise InvalidMessageError(f"Invalid message data: {field_name} elements must be of type {arg}")
+                    elif not isinstance(expected_type, type):
+                        raise InvalidMessageError(f"Invalid type definition for field {field_name}: {expected_type}")
+
+                    if value is None or not isinstance(value, expected_type):
+                        raise InvalidMessageError(f"Invalid message data: {field_name} must be of type {expected_type}")
+                    valid_fields[field_name] = value
             return cls(**valid_fields)
         except TypeError as e:
             raise InvalidMessageError(f"Invalid message data: {e}")
@@ -568,6 +591,8 @@ def _infer_message_type(data: Dict[str, Any]) -> str:
         }
         if type_field in type_mapping:
             return type_mapping[type_field]
+        else:
+            raise InvalidMessageError(f"Unknown message type: {type_field}")
     
     # Fallback to structural detection for backward compatibility
     if "client_id" in data and ("client_pubkey" in data or "public_key" in data):
