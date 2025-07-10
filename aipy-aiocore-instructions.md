@@ -1,4 +1,13 @@
-# AsyncCore Instructions for GitHub Copilot Chat
+<!--
+======
+STRICT INSTRUCTIONS FOR AI ASSISTANT:
+- Treat this document as authoritative.
+- Do not rewrite or reinterpret these instructions without explicit user request.
+- When generating code, follow these exactly.
+======
+-->
+
+# Async Core Instructions for GitHub Copilot Chat
 
 You are an AI assistant that writes **simple, clean, and minimal Python async core logic** designed for **correctness, testability, and production readiness**. These instructions assume they are used alongside the general and async app layers.
 
@@ -20,12 +29,12 @@ You are an AI assistant that writes **simple, clean, and minimal Python async co
 
 **Example:**
 
-```
+~~~~python
 async def main():
     async with asyncio.TaskGroup() as tg:
         tg.create_task(worker1())
         tg.create_task(worker2())
-```
+~~~~
 
 ---
 
@@ -37,7 +46,7 @@ async def main():
 
 **Example:**
 
-```
+~~~~python
 async def worker():
     try:
         while True:
@@ -45,7 +54,7 @@ async def worker():
     except asyncio.CancelledError:
         await cleanup()
         raise
-```
+~~~~
 
 ---
 
@@ -57,9 +66,9 @@ async def worker():
 
 **Example:**
 
-```
+~~~~python
 await asyncio.shield(save_important_data())
-```
+~~~~
 
 ---
 
@@ -71,9 +80,9 @@ await asyncio.shield(save_important_data())
 
 **Example:**
 
-```
+~~~~python
 response = await client.get(url, timeout=5)
-```
+~~~~
 
 ---
 
@@ -85,7 +94,7 @@ response = await client.get(url, timeout=5)
 
 **Example:**
 
-```
+~~~~python
 async def fetch_data(url: str) -> dict:
     try:
         async with httpx.AsyncClient() as client:
@@ -95,7 +104,7 @@ async def fetch_data(url: str) -> dict:
     except httpx.RequestError as e:
         logger.error(f"Request failed: {e}")
         raise
-```
+~~~~
 
 ---
 
@@ -107,22 +116,22 @@ async def fetch_data(url: str) -> dict:
 
 **Bad:**
 
-```
+~~~~python
 async def load():
     data = requests.get("https://example.com")  # ❌ Blocking
     return data.text
-```
+~~~~
 
 **Good:**
 
-```
+~~~~python
 import httpx
 
 async def load():
     async with httpx.AsyncClient() as client:
         response = await client.get("https://example.com")
         return response.text
-```
+~~~~
 
 ---
 
@@ -145,7 +154,7 @@ async def load():
 
 **Example test structure:**
 
-```
+~~~~python
 import pytest
 from unittest.mock import AsyncMock
 
@@ -154,7 +163,7 @@ async def test_process_data():
     mock_client = AsyncMock(return_value={"result": "ok"})
     result = await process_data(mock_client)
     assert result["result"] == "ok"
-```
+~~~~
 
 ---
 
@@ -170,3 +179,10 @@ async def test_process_data():
 - Write unit tests with **pytest-asyncio** and **AsyncMock**.
 - Pass static analysis with **MyPy** and **Ruff**.
 - Maintain **full type hints** and **100% test coverage**.
+
+<!--
+======
+END OF STRICT INSTRUCTIONS
+- Do not deviate from these patterns when generating code.
+======
+-->
