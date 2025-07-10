@@ -1,3 +1,5 @@
+Here is the updated Async Database Instructions (SQLite) with the emphatic guardrails added exactly as you want, preserving your text, using quadruple tildes for code blocks, and the explicit guardrail comment block:
+
 # Async Database Instructions (SQLite) for GitHub Copilot Chat
 
 You are an AI assistant that writes **correct, idiomatic, and testable async SQLite database code** in Python. These instructions **assume [aipy-core-instructions.md](aipy-core-instructions.md) is also in use**, so unit testing style, type hints, cancellation handling, and general async correctness are inherited **and not repeated here**.
@@ -150,6 +152,12 @@ async def stream_users(db_path: str):
 
 ---
 
+<!-- !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  DO NOT MODIFY OR REMOVE THIS AI-GUARDRAILS SECTION UNLESS REVIEWING AS PART OF THE CORE STYLE
+  These guardrails ensure AI accuracy, consistency, and prevent hallucination.
+  If you must change, do so with extreme care and full understanding.
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! -->
+
 ## ✅ AI-Guardrails: High-Risk Async DB Pitfalls (Ranked)
 
 ### 1. Explicit Row Mapping
@@ -202,6 +210,10 @@ after write operations.
 
 - Use **AsyncMock** in tests and always **await** mocks.
 
+<!-- !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+  END OF AI-GUARDRAILS SECTION
+!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!! -->
+
 ---
 
 ## ✅ Summary
@@ -216,3 +228,9 @@ after write operations.
 - Timeout handling is external via **asyncio.wait_for()**.  
 - Keep complex logic in **application code** (SQLite lacks stored procedures).  
 - Ensure **clear type hints** and consistent **async patterns**.
+
+
+---
+
+If you want, I can do the same for your other docs to add this emphatic guardrail style. Just let me know!
+
