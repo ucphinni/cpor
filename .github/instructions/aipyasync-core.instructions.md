@@ -21,12 +21,12 @@ You are an AI assistant that writes **simple, clean, and minimal Python async co
 
 **Example:**
 
-```
+~~~~python
 async def main():
     async with asyncio.TaskGroup() as tg:
         tg.create_task(worker1())
         tg.create_task(worker2())
-```
+~~~~
 
 ---
 
@@ -38,7 +38,7 @@ async def main():
 
 **Example:**
 
-```
+~~~~python
 async def worker():
     try:
         while True:
@@ -46,7 +46,7 @@ async def worker():
     except asyncio.CancelledError:
         await cleanup()
         raise
-```
+~~~~
 
 ---
 
@@ -58,9 +58,9 @@ async def worker():
 
 **Example:**
 
-```
+~~~~python
 await asyncio.shield(save_important_data())
-```
+~~~~
 
 ---
 
@@ -72,9 +72,9 @@ await asyncio.shield(save_important_data())
 
 **Example:**
 
-```
+~~~~python
 response = await client.get(url, timeout=5)
-```
+~~~~
 
 ---
 
@@ -86,7 +86,7 @@ response = await client.get(url, timeout=5)
 
 **Example:**
 
-```
+~~~~python
 async def fetch_data(url: str) -> dict:
     try:
         async with httpx.AsyncClient() as client:
@@ -96,7 +96,7 @@ async def fetch_data(url: str) -> dict:
     except httpx.RequestError as e:
         logger.error(f"Request failed: {e}")
         raise
-```
+~~~~
 
 ---
 
@@ -108,22 +108,32 @@ async def fetch_data(url: str) -> dict:
 
 **Bad:**
 
-```
+~~~~python
 async def load():
     data = requests.get("https://example.com")  # ❌ Blocking
     return data.text
-```
+~~~~
 
 **Good:**
 
-```
+~~~~python
 import httpx
 
 async def load():
     async with httpx.AsyncClient() as client:
         response = await client.get("https://example.com")
         return response.text
-```
+~~~~
+
+---
+
+## ✅ Enforce Async File I/O
+
+- All **file reading/writing** in `async def` must use **aiofiles** (or another non-blocking async library).
+- Blocking built-in `open()` and file methods are **prohibited** in async functions.
+- Use async context managers with **aiofiles.open()**.
+- Handle **chunked and random access** using aiofiles APIs.
+- See **aiofiles-async.md** for detailed patterns and guardrails.
 
 ---
 
@@ -146,7 +156,7 @@ async def load():
 
 **Example test structure:**
 
-```
+~~~~python
 import pytest
 from unittest.mock import AsyncMock
 
@@ -155,7 +165,7 @@ async def test_process_data():
     mock_client = AsyncMock(return_value={"result": "ok"})
     result = await process_data(mock_client)
     assert result["result"] == "ok"
-```
+~~~~
 
 ---
 
@@ -168,6 +178,7 @@ async def test_process_data():
 - Use **asyncio.shield** for critical sections.
 - Set **explicit timeouts** for all I/O.
 - Never mix sync calls in async contexts.
+- **Enforce async file I/O** with aiofiles.
 - Write unit tests with **pytest-asyncio** and **AsyncMock**.
 - Pass static analysis with **MyPy** and **Ruff**.
 - Maintain **full type hints** and **100% test coverage**.
