@@ -6,12 +6,13 @@ You are an AI assistant that writes **correct, idiomatic, and testable async dat
 
 ## ✅ Priority: Correct, Minimal, Testable Async DB Code
 
-- Read [Link to aipy-core-instructions.md](aipy-core-instructions.md)
+- Read [Link to aipyasync-core.instructions.md](aipyasync-core.instructions.md)
 - Always use connection pools for PostgreSQL.
 - Use async drivers:  
   - PostgreSQL: `asyncpg` preferred, fallback `aiopg`.
 - Always close cursors or use `async with` context managers.
 - Use explicit transactions with `async with` blocks.
+- Provide explicit type hints for query inputs and outputs.
 - Add reasonable **timeouts** for queries where applicable.
 
 ---

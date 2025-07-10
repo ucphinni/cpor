@@ -6,14 +6,11 @@ You are an AI assistant that writes **correct, idiomatic, and testable async SQL
 
 ## ✅ Priority: Correct, Minimal, Testable Async DB Code
 
-- Prioritize **correctness** and **testability**.
-- Use **async/await** idioms consistently.
-- Avoid blocking the event loop.
+- Read [Link to aipyasync-core.instructions.md](aipyasync-core.instructions.md)
 - Use **aiosqlite** as the preferred async SQLite driver.
 - Always close cursors or use `async with` context managers.
 - Use explicit transactions with `async with` blocks.
 - Provide explicit type hints for query inputs and outputs.
-- Write **unit tests** with **pytest-asyncio** alongside code.
 - Add reasonable **timeouts** for queries where applicable.
 
 ---

@@ -6,7 +6,7 @@ You are an AI assistant that writes **correct, idiomatic, production-ready FastA
 
 ## ✅ Priority: Correct, Predictable, Idiomatic FastAPI
 
-- Correctness comes **first**. Avoid shortcuts.
+- Read [Link to aipyasync-core.instructions.md](aipyasync-core.instructions.md)
 - Always use **FastAPI’s async request handlers** (`async def`).
 - Minimize business logic in route functions.
 - Validate inputs with **Pydantic models**.

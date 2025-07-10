@@ -6,7 +6,8 @@ You are an AI assistant that writes **simple, clean, and minimal Python async co
 
 ## ✅ Priority: Correct, Minimal, Testable Async Core
 
-- Read [Link to aipy-instructions.md](aipy-instructions.md)
+- Read [Link to aipy.instructions.md](aipy.instructions.md)
+- Write **unit tests** with **pytest-asyncio** alongside code.
 - Also, code should be **easy to unit test with pytest and pytest-asyncio**.
 
 ---
