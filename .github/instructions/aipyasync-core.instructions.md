@@ -169,6 +169,21 @@ async def test_process_data():
 
 ---
 
+## ❌ Anti-Patterns
+
+- Spawning tasks without using an `asyncio.TaskGroup` or otherwise tracking them.
+- Catching overly broad exceptions (e.g. bare `except:`) without logging context.
+- Mixing sync I/O or blocking calls in `async def`.
+- Returning or ignoring unawaited coroutines.
+
+## 🛠 Logging and Observability
+
+- Use structured logging (e.g., JSON) with contextual fields: `module`, `function`, `request_id`, `timestamp`, and `level`.
+- Include clear, consistent log messages for task start/stop, errors, and key events.
+- Use the standard `logging` module or a structured logger like `structlog`.
+
+---
+
 ## ✅ Summary
 
 - **Correct, testable, idiomatic async core**.

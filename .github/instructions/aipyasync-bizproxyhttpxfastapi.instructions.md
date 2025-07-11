@@ -180,3 +180,33 @@ async def inbound_send(request: Request) -> Response:
     return JSONResponse(content={"status": "ok"})
 
 ~~~
+
+## ❌ Anti-Patterns
+
+- Embedding business logic directly in proxy or endpoint code.
+- Ignoring HTTP errors by not calling `raise_for_status()`.
+- Starting background polling tasks outside of AsyncCore TaskGroup or FastAPI lifespan.
+- Using global proxy instances without proper injection.
+
+## 🛠 Logging and Observability
+
+- Log each proxied request and response with: `method`, `endpoint`, `status_code`, `duration_ms`, and `tags`.
+- Log any retries and throttling events with counts and delays.
+- Use FastAPI middleware for centralized error logging on inbound endpoints.
+
+## 💡 Configuration Examples
+
+```python
+from pydantic import BaseSettings
+
+class ProxySettings(BaseSettings):
+    base_url: str
+    timeout: float = 10.0
+    retry_retries: int = 3
+    retry_backoff: float = 1.0
+    throttle_rate: int = 60
+    throttle_window: int = 60  # seconds
+
+    class Config:
+        env_prefix = "PROXY_"
+```

@@ -166,6 +166,45 @@ Proxy must raise **meaningful, typed exceptions**:
 
 ---
 
+## ❌ Anti-Patterns
+
+- Exposing transport-specific details (e.g., HTTPX client) to business logic.
+- Implementing retry or throttling inline instead of via plugins or middleware.
+- Using bare `except:` to catch all exceptions without context.
+- Tight coupling between proxy and transport implementation.
+
+## 🛠 Logging and Observability
+
+- Log proxy lifecycle events: `connect`, `disconnect`, `send`, `receive` with timestamps.
+- Log error contexts including message tags, exception type, and retry count.
+- Use structured logs for later analysis and tracing.
+
+## 💡 Configuration Examples
+
+```yaml
+# proxy_config.yaml
+transport: httpx
+base_url: "https://api.example.com"
+retry:
+  retries: 3
+  backoff_factor: 0.5
+throttling:
+  max_per_minute: 60
+```
+
+```python
+from pydantic import BaseModel
+
+class ProxyConfig(BaseModel):
+    transport: str
+    base_url: str
+    retries: int = 3
+    backoff_factor: float = 0.5
+    max_per_minute: int = 60
+```
+
+---
+
 ## ✅ Summary
 
 - **Async-first** design following AsyncCore rules.
@@ -347,6 +386,45 @@ Proxy must raise **meaningful, typed exceptions**:
   - Retry attempts.
   - Rate limit status.
 - Allow **middleware-based logging** for easy extension.
+
+---
+
+## ❌ Anti-Patterns
+
+- Exposing transport-specific details (e.g., HTTPX client) to business logic.
+- Implementing retry or throttling inline instead of via plugins or middleware.
+- Using bare `except:` to catch all exceptions without context.
+- Tight coupling between proxy and transport implementation.
+
+## 🛠 Logging and Observability
+
+- Log proxy lifecycle events: `connect`, `disconnect`, `send`, `receive` with timestamps.
+- Log error contexts including message tags, exception type, and retry count.
+- Use structured logs for later analysis and tracing.
+
+## 💡 Configuration Examples
+
+```yaml
+# proxy_config.yaml
+transport: httpx
+base_url: "https://api.example.com"
+retry:
+  retries: 3
+  backoff_factor: 0.5
+throttling:
+  max_per_minute: 60
+```
+
+```python
+from pydantic import BaseModel
+
+class ProxyConfig(BaseModel):
+    transport: str
+    base_url: str
+    retries: int = 3
+    backoff_factor: float = 0.5
+    max_per_minute: int = 60
+```
 
 ---
 

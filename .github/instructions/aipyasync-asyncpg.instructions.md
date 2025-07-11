@@ -172,6 +172,31 @@ async with pool.acquire() as conn:
 
 ---
 
+## ❌ Anti-Patterns
+
+- Opening new connections per query instead of using a connection pool.
+- Nesting transactions without explicit savepoints.
+- Swallowing DB-specific exceptions with bare `except:` blocks.
+- Returning driver-specific row objects directly without mapping.
+
+## 🛠 Logging and Observability
+
+- Instrument query execution times with structured logs: `query`, `params`, `rows`, `duration_ms`.
+- Log connection pool usage metrics (acquire/release counts, wait times).
+- Capture and log asyncpg-specific exceptions including error codes.
+
+## 💡 Configuration Examples
+
+```python
+import asyncpg
+from asyncpg.pool import create_pool
+
+async def init_db_pool(dsn: str) -> asyncpg.Pool:
+    return await create_pool(dsn, min_size=1, max_size=10, timeout=5)
+```
+
+---
+
 ## ✅ Summary
 
 - Use **asyncpg** with connection pools for PostgreSQL; fallback to `aiopg` only if needed.  
@@ -202,4 +227,4 @@ async with pool.acquire() as conn:
 
 
 
-# 
+#

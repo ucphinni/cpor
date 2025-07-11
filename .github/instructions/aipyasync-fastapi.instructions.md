@@ -193,16 +193,43 @@ async def get_user(id: int):
 
 ---
 
-## ✅ AI Guardrails: Common FastAPI Mistakes to Avoid
+## ❌ Anti-Patterns
 
-- ❌ Avoid sync DB clients or blocking I/O in async routes.
-- ✅ Use async dependencies with `async def`.
-- ❌ Don’t start background tasks outside of lifespan.
-- ✅ Use lifespan context for proper task lifecycle.
-- ✅ Don’t swallow **CancelledError** — always **re-raise**.
-- ✅ Don’t forget **type hints** — AI relies on them for context.
-  
-  ---
+- Putting business logic directly in route handlers instead of service modules.
+- Starting background tasks outside of the FastAPI lifespan context.
+- Using FastAPI’s sync TestClient for async routes.
+- Swallowing `CancelledError` or other critical exceptions in dependencies or routes.
+
+## 🛠 Logging and Observability
+
+- Log each incoming request with method, path, and request ID.
+- Log response status and duration as structured data.
+- Use FastAPI middleware for centralized logging and error handling.
+
+## 💡 Configuration Examples
+
+```yaml
+# config.yaml
+database:
+  dsn: "postgresql://user:pass@localhost/db"
+http:
+  host: "0.0.0.0"
+  port: 8000
+```
+
+```python
+from pydantic import BaseSettings
+
+class Settings(BaseSettings):
+    dsn: str
+    host: str = "0.0.0.0"
+    port: int = 8000
+
+    class Config:
+        env_file = ".env"
+```
+
+---
 
 ## ✅ Summary
 

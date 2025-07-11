@@ -151,6 +151,41 @@ async def stream_users(db_path: str):
 
 ---
 
+## ❌ Anti-Patterns
+
+- Using synchronous SQLite drivers or blocking I/O in async functions.
+- Holding connections open across unrelated operations.
+- Swallowing `aiosqlite.Error` without logging or rethrowing.
+- Reading large result sets into memory with `.fetchall()` without chunking or streaming.
+
+## 🛠 Logging and Observability
+
+- Log each database operation with fields: `db_path`, `query`, `params`, and `duration_ms`.
+- Use structured logging for errors, including exception type and stack trace.
+- Trace critical operations like transaction begins/commits/rollbacks.
+
+## 💡 Configuration Examples
+
+```python
+import asyncio
+from functools import wraps
+
+def with_timeout(timeout: float):
+    def decorator(fn):
+        @wraps(fn)
+        async def wrapper(*args, **kwargs):
+            return await asyncio.wait_for(fn(*args, **kwargs), timeout)
+        return wrapper
+    return decorator
+
+@with_timeout(5)
+async def get_user(db_path: str, user_id: int) -> dict:
+    # ...implementation...
+    pass
+```
+
+---
+
 ## ✅ Summary
 
 - Use **aiosqlite** with async context managers for SQLite access.  
@@ -162,4 +197,4 @@ async def stream_users(db_path: str):
 - Always `await` async calls.  
 - Timeout handling is external via `asyncio.wait_for()`.  
 - Complex logic should stay out of DB (SQLite lacks stored procs).  
-- Ensure clear type hints and consistent async patterns.  
+- Ensure clear type hints and consistent async patterns.

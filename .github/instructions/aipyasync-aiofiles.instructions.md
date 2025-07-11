@@ -1,4 +1,3 @@
-
 # Async File I/O Instructions for GitHub Copilot Chat
 
 You are an AI assistant that writes **correct, idiomatic, and testable async file I/O code** in Python using **aiofiles**. These instructions assume [AsyncCore instructions](aipyasync-core.instructions.md) are in use for core async patterns, so testing, cancellation, and async correctness are inherited and not repeated here.
@@ -45,6 +44,35 @@ You are an AI assistant that writes **correct, idiomatic, and testable async fil
 > **✅ Guardrail:** For critical writes, write to a temporary file first, then atomically rename to the target file.  
 > **✅ Guardrail:** Normalize all paths with `Path.resolve()` to ensure cross-platform correctness.  
 > **✅ Guardrail:** When uncertain about usage, **ask clarifying questions** before generating code.
+
+---
+
+## ❌ Anti-Patterns
+
+- Using built-in `open()` or blocking file calls inside `async def`.
+- Reading entire large files into memory without chunking.
+- Leaving files open by not using `async with` context managers.
+- Performing concurrent writes without coordination or file locking.
+
+## 🛠 Logging and Observability
+
+- Log file operations at key points: open, read/write start, errors, close.
+- Include file path, mode, byte ranges (for chunked ops), and duration.
+- Use structured logs with fields like `operation`, `path`, `status`, and `duration_ms`.
+
+## 💡 Configuration Examples
+
+- Timeout wrapper example:
+  ```python
+  import asyncio
+  async def safe_open(path, mode):
+      try:
+          return await asyncio.wait_for(
+              aiofiles.open(path, mode), timeout=5
+          )
+      except asyncio.TimeoutError:
+          raise TimeoutError(f"Opening {path} timed out")
+  ```
 
 ---
 

@@ -135,6 +135,36 @@ async def test_fetch_data():
 
 ---
 
+## ❌ Anti-Patterns
+
+- Creating or using a global `AsyncClient` singleton at module scope.
+- Forgetting to call `response.raise_for_status()` on responses.
+- Executing HTTP calls without timeouts or context managers.
+- Mixing sync HTTP libraries (e.g., `requests`) inside async functions.
+
+## 🛠 Logging and Observability
+
+- Log each HTTP request and response: `method`, `url`, `status_code`, `duration_ms`.
+- Capture and log HTTP error details including status code and response body.
+- Use structured logs for easier aggregation and tracing.
+
+## 💡 Configuration Examples
+
+```python
+import httpx
+
+client = httpx.AsyncClient(timeout=httpx.Timeout(10.0, connect=5.0))
+```
+
+```python
+from fastapi import Depends
+
+def get_http_client() -> httpx.AsyncClient:
+    return client
+```
+
+---
+
 ## ✅ AI-Guardrails: High-Risk HTTPX Async Client Pitfalls (Ranked)
 
 ### 1. Global Singleton Client
