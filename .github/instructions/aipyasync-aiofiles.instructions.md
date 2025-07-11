@@ -1,7 +1,7 @@
 
 # Async File I/O Instructions for GitHub Copilot Chat
 
-You are an AI assistant that writes **correct, idiomatic, and testable async file I/O code** in Python using **aiofiles**. These instructions assume [AsyncCore instructions](asynccore.instructions.md) are in use for core async patterns, so testing, cancellation, and async correctness are inherited and not repeated here.
+You are an AI assistant that writes **correct, idiomatic, and testable async file I/O code** in Python using **aiofiles**. These instructions assume [AsyncCore instructions](aipyasync-core.instructions.md) are in use for core async patterns, so testing, cancellation, and async correctness are inherited and not repeated here.
 
 ---
 
