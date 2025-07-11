@@ -1,23 +1,74 @@
-# AsyncCore Instructions for GitHub Copilot Chat
+# Async Core Instructions for GitHub Copilot Chat
 
-You are an AI assistant that writes **simple, clean, and minimal Python async core logic** designed for **correctness, testability, and production readiness**. These instructions assume they are used alongside the general and async app layers.
+You are an AI assistant that writes **correct, production-ready, minimal, testable Python async core logic**.  
 
----
-
-## ✅ Priority: Correct, Minimal, Testable Async Core
-
-- Read [Link to aipy.instructions.md](aipy.instructions.md)
-- Write **unit tests** with **pytest-asyncio** alongside code.
-- Also, code should be **easy to unit test with pytest and pytest-asyncio**.
+> 🟢 **DEFAULT MODE: Everything is async.**  
+> 🟠 Sync code is allowed ONLY as an explicitly managed edge case.  
+> 🚫 Avoid all blocking calls in `async def` unless *properly wrapped*.  
 
 ---
 
-## ✅ Use TaskGroup.create_task() for Background Work
+## ✅ 📌 Priority Goals
 
-- Prefer **asyncio.TaskGroup** (Python 3.11+) to launch and track background tasks.
-- TaskGroup must be constructed at the **top-level async main** function or passed into objects while still in scope.
-- Ensures **all tasks complete or cancel** cleanly on shutdown.
-- Avoid "fire and forget" coroutines; all tasks must be **awaited or tracked**.
+- Correctness first — valid, working code the first time.
+- Async everywhere by default.
+- Fully testable with pytest and pytest-asyncio.
+- Minimal, clear, idiomatic Python 3.11+ async/await style.
+- Clear guardrails to avoid AI "guesswork" or incorrect patterns.
+- Designed for production service use.
+
+---
+
+## ✅ General Rules
+
+- All I/O and network calls must be **async**.
+- No blocking calls in async functions.  
+- Use **await** everywhere for coroutines.  
+- Use **asyncio.TaskGroup** for concurrency.  
+- Use **explicit timeouts** on I/O.
+- Handle **asyncio.CancelledError** correctly.
+- Pass static analysis: **MyPy** + **Ruff**.
+- Complete type hints.
+- Unit test coverage ~100%.
+
+---
+
+## ✅ Structured Guardrails
+
+### 1️⃣ Enforce Async I/O
+
+- Use only **async-capable** libraries:
+  - HTTP → `httpx.AsyncClient`
+  - Files → `aiofiles`
+  - DB → `aiosqlite`, `asyncpg`, etc.
+- Never call blocking libraries directly in async code.
+
+**❌ Bad:**
+
+~~~~python
+async def load():
+    data = requests.get("https://example.com")  # ❌ Blocking
+    return data.text
+~~~~
+
+**✅ Good:**
+
+~~~~python
+import httpx
+
+async def load():
+    async with httpx.AsyncClient() as client:
+        response = await client.get("https://example.com")
+        return response.text
+~~~~
+
+---
+
+### 2️⃣ Use TaskGroup for Concurrency
+
+- All background tasks must be tracked.
+- No "fire-and-forget" coroutines.
+- Use Python 3.11+ `asyncio.TaskGroup`.
 
 **Example:**
 
@@ -30,11 +81,10 @@ async def main():
 
 ---
 
-## ✅ Graceful Cancellation with CancelledError
+### 3️⃣ Graceful Cancellation
 
-- Always **catch** `asyncio.CancelledError` in loops or cleanup code.
-- Do **clean shutdown work** before exiting.
-- **Re-raise** after handling so cancellation is propagated correctly.
+- Always handle `asyncio.CancelledError`.
+- Clean up resources and re-raise to propagate.
 
 **Example:**
 
@@ -50,11 +100,10 @@ async def worker():
 
 ---
 
-## ✅ Await All Subtasks and Shield Critical Sections
+### 4️⃣ Await All Subtasks
 
-- Use **await** everywhere coroutines are called.
-- Never return unawaited coroutines by mistake.
-- Use **asyncio.shield()** for critical sections that *must* finish even if cancellation happens.
+- Never return or ignore unawaited coroutines.
+- Use `asyncio.shield()` to protect critical sections.
 
 **Example:**
 
@@ -64,11 +113,9 @@ await asyncio.shield(save_important_data())
 
 ---
 
-## ✅ Explicit Timeouts on I/O
+### 5️⃣ Explicit Timeouts
 
-- Always specify **reasonable timeouts** on network or DB calls.
-- Prevents hanging tasks and wasted resources.
-- Default to **short, sensible values**.
+- Always use **reasonable timeouts** on network/DB calls.
 
 **Example:**
 
@@ -78,11 +125,11 @@ response = await client.get(url, timeout=5)
 
 ---
 
-## ✅ Exception Handling in Async Functions
+### 6️⃣ Exception Handling
 
-- Use **try/except** around expected error conditions.
-- Log with **contextual info** to aid debugging.
-- Avoid broad excepts that swallow tracebacks or hide failures.
+- Use try/except around expected errors.
+- Log with **contextual info**.
+- Avoid broad excepts that swallow tracebacks.
 
 **Example:**
 
@@ -100,61 +147,82 @@ async def fetch_data(url: str) -> dict:
 
 ---
 
-## ✅ Avoid Mixing Sync and Async Calls
+## ✅ 7️⃣ Safe Sync Integration
 
-- **Never** call blocking sync I/O in `async def`.
-- Always use async libraries (`aiofiles`, `aiosqlite`, `aiopg`, `httpx`).
-- This avoids blocking the event loop and ensures true concurrency.
+> For exceptional cases only!
 
-**Bad:**
+- If you **must** use a blocking/sync library, always isolate in an executor.
 
-~~~~python
-async def load():
-    data = requests.get("https://example.com")  # ❌ Blocking
-    return data.text
-~~~~
-
-**Good:**
+**Example:**
 
 ~~~~python
-import httpx
+import asyncio
 
-async def load():
-    async with httpx.AsyncClient() as client:
-        response = await client.get("https://example.com")
-        return response.text
+def blocking_work(x: int) -> int:
+    # Truly blocking logic
+    ...
+
+async def async_wrapper(x: int) -> int:
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, blocking_work, x)
 ~~~~
+
+✅ Document *why* sync is unavoidable.  
+✅ Keep sync-wrapping isolated in dedicated modules.  
+✅ Explicitly label as "SYNC EXCEPTION HANDLER" in codebase.
 
 ---
 
 ## ✅ Enforce Async File I/O
 
-- All **file reading/writing** in `async def` must use **aiofiles** (or another non-blocking async library).
-- Blocking built-in `open()` and file methods are **prohibited** in async functions.
-- Use async context managers with **aiofiles.open()**.
-- Handle **chunked and random access** using aiofiles APIs.
-- See **aiofiles-async.md** for detailed patterns and guardrails.
+- Always use **aiofiles** in async def.
+- Blocking built-in `open()` is prohibited.
+
+**Example:**
+
+~~~~python
+import aiofiles
+
+async def read_file(path: str) -> str:
+    async with aiofiles.open(path, mode='r') as f:
+        return await f.read()
+~~~~
 
 ---
 
-## ✅ Static Analysis with MyPy and Ruff
+## ✅ Logging and Observability
 
-- Code **must pass** static type checks with **MyPy**.
-- Code **must be linted** with **Ruff**.
-- Enforce **consistent, complete type hints**.
-- Clean code = easier for AI to extend correctly.
+- Use structured logging (e.g. JSON) with:
+  - module
+  - function
+  - request_id
+  - timestamp
+  - level
+- Consistent, clear log messages for:
+  - task start/stop
+  - errors
+  - key events
+- Prefer `logging` module or `structlog`.
 
 ---
 
-## ✅ Unit Test Expectations
+## ✅ Static Analysis Requirements
 
+- Must pass **MyPy** (type checking).
+- Must pass **Ruff** (linting, formatting).
+- Complete, consistent **type hints** everywhere.
+
+---
+
+## ✅ Testing Requirements
+
+- Use **pytest** and **pytest-asyncio**.
 - Write **unit tests in parallel** with production code.
-- Target **100% test coverage** of async logic.
+- Target ~100% test coverage.
 - Tests must be **minimal, clear, deterministic**.
-- Use **pytest-asyncio** for async test support.
 - Use **AsyncMock** to isolate async dependencies.
 
-**Example test structure:**
+**Example test:**
 
 ~~~~python
 import pytest
@@ -169,31 +237,31 @@ async def test_process_data():
 
 ---
 
-## ❌ Anti-Patterns
+## ✅ Anti-Patterns (Strictly Forbidden)
 
-- Spawning tasks without using an `asyncio.TaskGroup` or otherwise tracking them.
-- Catching overly broad exceptions (e.g. bare `except:`) without logging context.
-- Mixing sync I/O or blocking calls in `async def`.
-- Returning or ignoring unawaited coroutines.
-
-## 🛠 Logging and Observability
-
-- Use structured logging (e.g., JSON) with contextual fields: `module`, `function`, `request_id`, `timestamp`, and `level`.
-- Include clear, consistent log messages for task start/stop, errors, and key events.
-- Use the standard `logging` module or a structured logger like `structlog`.
+- Fire-and-forget tasks not tracked.
+- Blocking I/O in async functions.
+- Broad `except:` without logging.
+- Returning unawaited coroutines.
+- Mixing sync calls without explicit wrapping.
+- Missing type hints.
 
 ---
 
 ## ✅ Summary
 
-- **Correct, testable, idiomatic async core**.
-- Use **TaskGroup** for safe concurrency.
-- Handle **CancelledError** with care, always **re-raise**.
-- Await **all** subtasks; never leave work untracked.
-- Use **asyncio.shield** for critical sections.
-- Set **explicit timeouts** for all I/O.
-- Never mix sync calls in async contexts.
-- **Enforce async file I/O** with aiofiles.
-- Write unit tests with **pytest-asyncio** and **AsyncMock**.
-- Pass static analysis with **MyPy** and **Ruff**.
-- Maintain **full type hints** and **100% test coverage**.
+- ✅ Async everywhere by default.
+- ✅ Track all tasks with TaskGroup.
+- ✅ Handle CancelledError correctly.
+- ✅ Await all coroutines.
+- ✅ Use shield for critical sections.
+- ✅ Explicit timeouts on I/O.
+- ✅ No blocking sync in async code without explicit wrapping.
+- ✅ Enforce async file I/O with aiofiles.
+- ✅ Structured logging.
+- ✅ 100% type-hinted, static-analysed code.
+- ✅ Full unit test coverage with pytest-asyncio.
+
+---
+
+> **AI Guardrail:** Never generate blocking sync code inside async functions unless you explicitly use `run_in_executor` and document why. Default = async everywhere.
