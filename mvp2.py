@@ -1,5 +1,3 @@
-Great. Here's your single-file MVP2 with Typer CLI, classes, and async/clean structure:
-
 #!/usr/bin/env python3
 
 """
@@ -16,8 +14,7 @@ import asyncio
 import logging
 import os
 import signal
-import sys
-from typing import Any, Optional, Sequence
+from typing import Any, Dict, Protocol, Sequence
 import typer
 
 from sqlalchemy.ext.asyncio import (
@@ -28,8 +25,26 @@ from sqlalchemy.ext.asyncio import (
 from sqlalchemy.orm import declarative_base
 from sqlalchemy import Column, Integer, String, select
 
-from gmqtt import Client as GMQTTClient
+from gmqtt import Client as GMQTTClient  # type: ignore
 import httpx
+
+# MQTT Protocol Definitions
+class MQTTClientProtocol(Protocol):
+    """Protocol defining the required MQTT client interface."""
+    on_connect: Any
+    on_message: Any
+
+    def subscribe(self, subscription_or_topic: str, qos: int = 0, **kwargs: Any) -> None: ...
+    async def connect(
+        self,
+        host: str,
+        port: int = 1883,
+        ssl: bool = False,
+        keepalive: int = 60,
+        version: int = 5,
+        raise_exc: bool = True
+    ) -> None: ...
+    async def disconnect(self, reason_code: int = 0, **properties: Dict[str, Any]) -> None: ...
 
 # CLI App
 app = typer.Typer()
@@ -94,17 +109,32 @@ class MQTTClient:
         self.broker = broker
         self.topic = topic
         self.client_id = client_id
-        self.client = GMQTTClient(self.client_id)
+        self.client: MQTTClientProtocol = GMQTTClient(self.client_id)
 
     def configure_callbacks(self) -> None:
         self.client.on_connect = self.on_connect
         self.client.on_message = self.on_message
 
-    def on_connect(self, client, flags, rc, properties) -> None:
+    def on_connect(
+        self, 
+        client: MQTTClientProtocol,
+        flags: Dict[str, bool],
+        rc: int,
+        properties: Dict[str, str]
+    ) -> None:
+        """Called when client connects to broker."""
         logger.info("[MQTT] Connected. Subscribing...")
         client.subscribe(self.topic)
 
-    def on_message(self, client, topic, payload, qos, properties) -> None:
+    def on_message(
+        self,
+        client: MQTTClientProtocol,
+        topic: str,
+        payload: bytes,
+        qos: int,
+        properties: Dict[str, str]
+    ) -> None:
+        """Called when message is received."""
         logger.info(f"[MQTT] Message: topic={topic}, payload={payload.decode()}")
 
     async def connect(self) -> None:
@@ -223,44 +253,3 @@ def listhouses(
 # Section 7: Main Entry
 if __name__ == "__main__":
     app()
-
-
----
-
-✅ How to run this
-
-1️⃣ Install requirements:
-
-pip install gmqtt httpx typer[all] sqlalchemy aiosqlite
-
-2️⃣ Example commands:
-
-python mvp2.py initdb
-python mvp2.py listhouses
-python mvp2.py run
-
-
----
-
-⚡ Notes:
-
-Fully async everywhere.
-
-Typer CLI with options for DB, MQTT, Nest.
-
-Clean single-file but easy to split later.
-
-Environment variable overrides.
-
-Graceful shutdown via signals.
-
-Logging structured.
-
-Extensible: you can drop in real Nest or DB logic without refactoring the interface.
-
-
-
----
-
-If you want, we can tweak anything about it next!
-
