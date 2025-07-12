@@ -71,6 +71,11 @@ AsyncSessionLocal = async_sessionmaker(
     class_=AsyncSession,
     expire_on_commit=False
 )
+AsyncSessionLocal = async_sessionmaker(
+    bind=engine,
+    class_=AsyncSession,
+    expire_on_commit=False
+)
 
 # MQTT client details
 MQTT_BROKER = "test.mosquitto.org"  # Replace with your broker
@@ -88,6 +93,7 @@ async def create_db_and_sample_house() -> None:
     async with engine.begin() as conn:
         await conn.run_sync(Base.metadata.create_all)
     
+    
     async with AsyncSessionLocal() as session:
         stmt = select(House).where(House.name == "My House")
         result = await session.execute(stmt)
@@ -101,6 +107,9 @@ async def create_db_and_sample_house() -> None:
 
 async def print_houses() -> None:
     async with AsyncSessionLocal() as session:
+        stmt = select(House)
+        result: ScalarResult[House] = (await session.execute(stmt)).scalars()
+        houses: Sequence[House] = result.all()
         stmt = select(House)
         result: ScalarResult[House] = (await session.execute(stmt)).scalars()
         houses: Sequence[House] = result.all()
@@ -156,6 +165,13 @@ async def main() -> None:
         keepalive=60,
         version=MQTTv50
     )
+    await client.connect(
+        host=MQTT_BROKER,
+        port=1883,
+        ssl=False,
+        keepalive=60,
+        version=MQTTv50
+    )
 
     # Run forever
     try:
@@ -163,6 +179,7 @@ async def main() -> None:
             await asyncio.sleep(1)
     except KeyboardInterrupt:
         logging.info("Disconnecting MQTT client")
+        await client.disconnect(reason_code=0)
         await client.disconnect(reason_code=0)
 
 if __name__ == "__main__":
