@@ -5,8 +5,14 @@ This URL will prompt the user to authorize their Google Home devices
 for use with the Device Access project.
 """
 
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
+
 # Your Device Access project configuration
-CLIENT_ID = "572931968974-a8j2o61lsdet2ilc4n9lhp17l0npp3oj.apps.googleusercontent.com"
+CLIENT_ID = os.getenv("NEST_CLIENT_ID")
 PROJECT_ID = "fdb963af-b95c-47c2-978e-8cc889b05b8d"
 REDIRECT_URI = "http://localhost:8081/"
 
@@ -36,7 +42,7 @@ def create_device_linking_url():
     print()
     print("Instructions:")
     print("1. Copy the URL above and paste it into your browser")
-    print("2. Sign in with ucphinni@gmail.com (the account that has your Nest devices)")
+    print("2. Sign in with [your-email] (the account that has your Nest devices)")
     print("3. You should see a prompt to authorize access to your Nest devices")
     print("4. Accept the authorization to link your devices to the Device Access project")
     print("5. After success, your devices should appear in the API responses")

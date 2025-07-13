@@ -17,7 +17,7 @@ ACCESS_TOKEN = os.getenv("NEST_ACCESS_TOKEN")
 
 print("Environment variables loaded:")
 print(f"NEST_PROJECT_ID: {NEST_PROJECT_ID}")
-print(f"ACCESS_TOKEN: {ACCESS_TOKEN[:20]}..." if ACCESS_TOKEN else "None")
+print(f"ACCESS_TOKEN: {'[REDACTED]' if ACCESS_TOKEN else 'None'}")
 
 # API endpoints
 NEST_API_ENDPOINT = 'https://smartdevicemanagement.googleapis.com/v1'

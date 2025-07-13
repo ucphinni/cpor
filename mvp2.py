@@ -21,6 +21,7 @@ import typer
 from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
+import time
 
 # Load environment variables from .env file
 load_dotenv()
@@ -66,29 +67,33 @@ class MQTTClientProtocol(Protocol):
 
 # CLI App
 app = typer.Typer()
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S"
+)
 logger = logging.getLogger(__name__)
 
 # Environment / Config
-DATABASE_URL = os.environ.get("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
+DATABASE_URL = str(os.environ.get("DATABASE_URL", "sqlite+aiosqlite:///./test.db"))
 
 # MQTT Config - Home Assistant defaults
-MQTT_BROKER = os.environ.get("MQTT_BROKER", "192.168.8.241")
+MQTT_BROKER = str(os.environ.get("MQTT_BROKER", "192.168.8.241"))
 MQTT_PORT = int(os.environ.get("MQTT_PORT", "1883"))
-MQTT_USER = os.environ.get("MQTT_USER", "mqtt")
-MQTT_PASSWORD = os.environ.get("MQTT_PASSWORD", "mqtt")
+MQTT_USER = str(os.environ.get("MQTT_USER", "mqtt"))
+MQTT_PASSWORD = str(os.environ.get("MQTT_PASSWORD", "mqtt"))
 MQTT_USE_SSL = os.environ.get("MQTT_USE_SSL", "false").lower() == "true"
-MQTT_TOPIC = os.environ.get("MQTT_TOPIC", "home/+/temperature")
-MQTT_CLIENT_ID = os.environ.get("MQTT_CLIENT_ID", "mvp2_client_cote")
+MQTT_TOPIC = str(os.environ.get("MQTT_TOPIC", "home/+/temperature"))
+MQTT_CLIENT_ID = str(os.environ.get("MQTT_CLIENT_ID", "mvp2_client_cote"))
 
 # Nest API Config - Using Device Access Console and OAuth2
-NEST_ACCESS_TOKEN = os.environ.get("NEST_ACCESS_TOKEN")
-NEST_PROJECT_ID = os.environ.get("NEST_PROJECT_ID")
+NEST_ACCESS_TOKEN: str | None = str(os.environ.get("NEST_ACCESS_TOKEN")) if os.environ.get("NEST_ACCESS_TOKEN") is not None else None
+NEST_PROJECT_ID: str = str(os.environ.get("NEST_PROJECT_ID"))
 NEST_API_URL = "https://smartdevicemanagement.googleapis.com/v1"
 
 # Google Cloud Pub/Sub Config
-GCP_PROJECT_ID = os.environ.get("GCP_PROJECT_ID")
-PUBSUB_SUBSCRIPTION_ID = os.environ.get("PUBSUB_SUBSCRIPTION_ID")
+GCP_PROJECT_ID = str(os.environ.get("GCP_PROJECT_ID")) if os.environ.get("GCP_PROJECT_ID") is not None else None
+PUBSUB_SUBSCRIPTION_ID = str(os.environ.get("PUBSUB_SUBSCRIPTION_ID")) if os.environ.get("PUBSUB_SUBSCRIPTION_ID") is not None else None
 
 # Validate required environment variables
 _required_env_vars = [
@@ -115,8 +120,8 @@ class TokenManager:
     def _load_from_env(self):
         """Load current access token from environment."""
         load_dotenv()  # Reload environment
-        self.access_token = os.getenv('NEST_ACCESS_TOKEN')
-        
+        self.access_token = str(os.getenv('NEST_ACCESS_TOKEN')) if os.getenv('NEST_ACCESS_TOKEN') is not None else None
+
     async def get_valid_token(self) -> str:
         """Get a valid access token, refreshing if necessary."""
         async with self._refresh_lock:
@@ -129,6 +134,8 @@ class TokenManager:
                 logger.info("[TokenManager] Token is missing or expired, refreshing...")
                 await self._refresh_token()
                 
+            if not self.access_token:
+                raise RuntimeError("Failed to obtain a valid access token.")
             return self.access_token
         
     def _is_token_expired(self) -> bool:
@@ -365,7 +372,7 @@ class NestAPI:
         logger.info("[Nest] Set temperature for device %s: heat=%s, cool=%s",
                    device_id, heat, cool)
 
-    async def _make_authenticated_request(self, method: str, endpoint: str, json_data: Dict[str, Any] = None, retry_count: int = 0) -> Dict[str, Any]:
+    async def _make_authenticated_request(self, method: str, endpoint: str, json_data: Dict[str, Any] | None = None, retry_count: int = 0) -> Dict[str, Any]:
         """Make an authenticated request with automatic token refresh on auth failures."""
         max_retries = 2
         
@@ -669,9 +676,9 @@ def run(
     """
     async def _main() -> None:
         # Initialize TokenManager for automatic token refresh
-        nest_client_id = os.getenv('NEST_CLIENT_ID')
-        nest_client_secret = os.getenv('NEST_CLIENT_SECRET')
-        nest_refresh_token = os.getenv('NEST_REFRESH_TOKEN')
+        nest_client_id = str(os.getenv('NEST_CLIENT_ID'))
+        nest_client_secret = str(os.getenv('NEST_CLIENT_SECRET'))
+        nest_refresh_token = str(os.getenv('NEST_REFRESH_TOKEN'))
         
         if not all([nest_client_id, nest_client_secret, nest_refresh_token]):
             logger.error("[App] Missing required Nest OAuth credentials in environment")
@@ -743,8 +750,8 @@ class MQTTHandler:
         self._client.on_connect = self._on_connect
         self._client.on_message = self._on_message
         self._client.on_disconnect = self._on_disconnect
+        self._client.on_subscribe = self._on_subscribe
         
-        # Use parameters if provided, otherwise use environment values
         self._broker = broker or MQTT_BROKER
         self._port = port or MQTT_PORT
         self._username = username or MQTT_USER
@@ -753,52 +760,63 @@ class MQTTHandler:
         self._topic = topic or MQTT_TOPIC
         self._connected = False
         
+        # Disable our reconnection logic - let gmqtt handle it
+        self._client.set_config({
+            'reconnect_retries': -1,  # Infinite retries
+            'reconnect_delay': 5,     # 5 second delay between retries
+        })
+        
         if self._username and self._password:
             self._client.set_auth_credentials(self._username, self._password)  # type: ignore
 
-    def _on_connect(self, client: MQTTClientProtocol, flags: Dict[str, Any], rc: int, properties: Any) -> None:
-        logger.info("[MQTT] Connected with result code: %s", rc)
+    def _log_with_time(self, msg: str, *args: Any) -> None:
+        now = time.strftime('%Y-%m-%d %H:%M:%S')
+        logger.info(f"[{now}] {msg}", *args)
+
+    def _on_connect(self, client: MQTTClientProtocol, flags: Dict[str, Any], rc: int, properties: Dict[str, Any]) -> None:
+        self._log_with_time("[MQTT] Connected with result code: %s", rc)
         self._connected = True
-        # Subscribe to topic on connect
         self.subscribe(self._topic)
 
-    def _on_disconnect(self, client: MQTTClientProtocol, packet: Any, exc: Any = None) -> None:
-        logger.info("[MQTT] Disconnected")
+    def _on_subscribe(self, client: MQTTClientProtocol, mid: int, qos: tuple[int, ...], properties: Dict[str, Any]) -> None:
+        self._log_with_time(f"[MQTT] Subscribed (mid={mid}, qos={qos})")
+
+    def _on_disconnect(self, client: MQTTClientProtocol, packet: Any, exc: Exception | None = None) -> None:
+        self._log_with_time("[MQTT] Disconnected (exc=%s) - gmqtt will handle reconnection", exc)
         self._connected = False
         if exc:
-            logger.error("[MQTT] Disconnection error: %s", exc)
+            self._log_with_time("[MQTT] Disconnection error: %s", exc)
 
-    def _on_message(self, client: MQTTClientProtocol, topic: str, payload: bytes, qos: int, properties: Any) -> None:
-        logger.info("[MQTT] Received message on %s: %s", topic, payload.decode())
+    def _on_message(self, client: MQTTClientProtocol, topic: str, payload: bytes, qos: int, properties: Dict[str, Any]) -> None:
+        try:
+            self._log_with_time("[MQTT] Received message on %s: %s", topic, payload.decode())
+        except Exception as e:
+            self._log_with_time("[MQTT] Error in message callback: %s", e)
 
     def subscribe(self, topic: str, qos: int = 0) -> None:
-        """Subscribe to a topic."""
         if self._connected:
             self._client.subscribe(topic, qos=qos)  # type: ignore
-            logger.info("[MQTT] Subscribed to %s", topic)
+            self._log_with_time("[MQTT] Subscribed to %s", topic)
 
     async def connect(self) -> None:
-        """Connect to the MQTT broker."""
         try:
             await self._client.connect(  # type: ignore
                 self._broker,
                 port=self._port,
                 ssl=self._use_ssl,
-                keepalive=60,
+                keepalive=60,  # Back to 60 seconds
                 version=5
             )
-            logger.info("[MQTT] Connected to %s:%d (SSL=%s)", 
-                       self._broker, self._port, self._use_ssl)
+            self._log_with_time("[MQTT] Connected to %s:%d (SSL=%s)", self._broker, self._port, self._use_ssl)
         except Exception as e:
-            logger.error("[MQTT] Connection failed: %s", e)
+            self._log_with_time("[MQTT] Connection failed: %s", e)
             raise
 
     async def disconnect(self) -> None:
-        """Disconnect from the MQTT broker."""
         if self._connected:
             await self._client.disconnect()  # type: ignore
             self._connected = False
-            logger.info("[MQTT] Disconnected.")
+            self._log_with_time("[MQTT] Disconnected.")
 
 @app.command()
 def test_mqtt(
@@ -843,9 +861,9 @@ def test_nest(
     
     async def test() -> None:
         # Initialize TokenManager for automatic token refresh
-        nest_client_id = os.getenv('NEST_CLIENT_ID')
-        nest_client_secret = os.getenv('NEST_CLIENT_SECRET')
-        nest_refresh_token = os.getenv('NEST_REFRESH_TOKEN')
+        nest_client_id = str(os.getenv('NEST_CLIENT_ID'))
+        nest_client_secret = str(os.getenv('NEST_CLIENT_SECRET'))
+        nest_refresh_token = str(os.getenv('NEST_REFRESH_TOKEN'))
         
         if not all([nest_client_id, nest_client_secret, nest_refresh_token]):
             logger.error("[Test] Missing required Nest OAuth credentials in environment")
@@ -894,9 +912,9 @@ def refresh_token() -> None:
     
     async def refresh() -> None:
         # Initialize TokenManager
-        nest_client_id = os.getenv('NEST_CLIENT_ID')
-        nest_client_secret = os.getenv('NEST_CLIENT_SECRET')
-        nest_refresh_token = os.getenv('NEST_REFRESH_TOKEN')
+        nest_client_id = str(os.getenv('NEST_CLIENT_ID'))
+        nest_client_secret = str(os.getenv('NEST_CLIENT_SECRET'))
+        nest_refresh_token = str(os.getenv('NEST_REFRESH_TOKEN'))
         
         if not all([nest_client_id, nest_client_secret, nest_refresh_token]):
             logger.error("[Refresh] Missing required Nest OAuth credentials in environment")

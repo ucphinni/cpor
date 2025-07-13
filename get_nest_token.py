@@ -11,7 +11,7 @@ from aiohttp import web
 from google_auth_oauthlib.flow import InstalledAppFlow
 
 # Load client configuration from the downloaded JSON file
-client_secrets_file = 'client_secret_572931968974-a8j2o61lsdet2ilc4n9lhp17l0npp3oj.apps.googleusercontent.com.json'
+client_secrets_file = os.getenv("GOOGLE_CLIENT_SECRETS_FILE", "client_secret.json")
 try:
     with open(client_secrets_file) as f:
         CLIENT_CONFIG = json.load(f)
