@@ -21,6 +21,7 @@ import typer
 from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
+import time
 
 # Load environment variables from .env file
 load_dotenv()
@@ -743,8 +744,8 @@ class MQTTHandler:
         self._client.on_connect = self._on_connect
         self._client.on_message = self._on_message
         self._client.on_disconnect = self._on_disconnect
+        self._client.on_subscribe = self._on_subscribe
         
-        # Use parameters if provided, otherwise use environment values
         self._broker = broker or MQTT_BROKER
         self._port = port or MQTT_PORT
         self._username = username or MQTT_USER
@@ -753,52 +754,63 @@ class MQTTHandler:
         self._topic = topic or MQTT_TOPIC
         self._connected = False
         
+        # Disable our reconnection logic - let gmqtt handle it
+        self._client.set_config({
+            'reconnect_retries': -1,  # Infinite retries
+            'reconnect_delay': 5,     # 5 second delay between retries
+        })
+        
         if self._username and self._password:
             self._client.set_auth_credentials(self._username, self._password)  # type: ignore
 
-    def _on_connect(self, client: MQTTClientProtocol, flags: Dict[str, Any], rc: int, properties: Any) -> None:
-        logger.info("[MQTT] Connected with result code: %s", rc)
+    def _log_with_time(self, msg: str, *args: Any) -> None:
+        now = time.strftime('%Y-%m-%d %H:%M:%S')
+        logger.info(f"[{now}] {msg}", *args)
+
+    def _on_connect(self, client: MQTTClientProtocol, flags: Dict[str, Any], rc: int, properties: Dict[str, Any]) -> None:
+        self._log_with_time("[MQTT] Connected with result code: %s", rc)
         self._connected = True
-        # Subscribe to topic on connect
         self.subscribe(self._topic)
 
-    def _on_disconnect(self, client: MQTTClientProtocol, packet: Any, exc: Any = None) -> None:
-        logger.info("[MQTT] Disconnected")
+    def _on_subscribe(self, client: MQTTClientProtocol, mid: int, qos: tuple[int, ...], properties: Dict[str, Any]) -> None:
+        self._log_with_time(f"[MQTT] Subscribed (mid={mid}, qos={qos})")
+
+    def _on_disconnect(self, client: MQTTClientProtocol, packet: Any, exc: Exception | None = None) -> None:
+        self._log_with_time("[MQTT] Disconnected (exc=%s) - gmqtt will handle reconnection", exc)
         self._connected = False
         if exc:
-            logger.error("[MQTT] Disconnection error: %s", exc)
+            self._log_with_time("[MQTT] Disconnection error: %s", exc)
 
-    def _on_message(self, client: MQTTClientProtocol, topic: str, payload: bytes, qos: int, properties: Any) -> None:
-        logger.info("[MQTT] Received message on %s: %s", topic, payload.decode())
+    def _on_message(self, client: MQTTClientProtocol, topic: str, payload: bytes, qos: int, properties: Dict[str, Any]) -> None:
+        try:
+            self._log_with_time("[MQTT] Received message on %s: %s", topic, payload.decode())
+        except Exception as e:
+            self._log_with_time("[MQTT] Error in message callback: %s", e)
 
     def subscribe(self, topic: str, qos: int = 0) -> None:
-        """Subscribe to a topic."""
         if self._connected:
             self._client.subscribe(topic, qos=qos)  # type: ignore
-            logger.info("[MQTT] Subscribed to %s", topic)
+            self._log_with_time("[MQTT] Subscribed to %s", topic)
 
     async def connect(self) -> None:
-        """Connect to the MQTT broker."""
         try:
             await self._client.connect(  # type: ignore
                 self._broker,
                 port=self._port,
                 ssl=self._use_ssl,
-                keepalive=60,
+                keepalive=60,  # Back to 60 seconds
                 version=5
             )
-            logger.info("[MQTT] Connected to %s:%d (SSL=%s)", 
-                       self._broker, self._port, self._use_ssl)
+            self._log_with_time("[MQTT] Connected to %s:%d (SSL=%s)", self._broker, self._port, self._use_ssl)
         except Exception as e:
-            logger.error("[MQTT] Connection failed: %s", e)
+            self._log_with_time("[MQTT] Connection failed: %s", e)
             raise
 
     async def disconnect(self) -> None:
-        """Disconnect from the MQTT broker."""
         if self._connected:
             await self._client.disconnect()  # type: ignore
             self._connected = False
-            logger.info("[MQTT] Disconnected.")
+            self._log_with_time("[MQTT] Disconnected.")
 
 @app.command()
 def test_mqtt(
