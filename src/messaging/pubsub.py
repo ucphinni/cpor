@@ -1,7 +1,9 @@
 """Google Cloud Pub/Sub client implementation."""
 import asyncio
 import json
+import threading
 from typing import Optional, Callable, Any
+from concurrent.futures import ThreadPoolExecutor
 from google.cloud import pubsub_v1
 import google.auth.credentials
 import google.oauth2.credentials
@@ -25,6 +27,13 @@ class PubSubClient:
         self._running = False
         self._subscriber = None
         self._streaming_pull_future = None
+        # Use a thread pool for running async callbacks
+        self._executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="pubsub-callback")
+        self._loop = None
+        
+    async def _setup_event_loop(self):
+        """Set up the event loop for callback handling."""
+        self._loop = asyncio.get_running_loop()
         
     @with_retry(max_retries=3, exceptions=(Exception,))
     async def _get_credentials(self) -> google.auth.credentials.Credentials:
@@ -44,6 +53,7 @@ class PubSubClient:
     async def start_listening(self, callback=None):
         """Start listening for Pub/Sub messages using gRPC streaming pull."""
         self._running = True
+        await self._setup_event_loop()
         logger.info("[PubSub] Starting to listen for Nest events using gRPC...")
         
         try:
@@ -63,25 +73,38 @@ class PubSubClient:
             )
             logger.info(f"[PubSub] Using subscription path: {subscription_path}")
 
-            # Define message callback - must be synchronous for Google Cloud PubSub
+            # Define message callback - synchronous for Google Cloud PubSub
             def message_callback(message):
+                """
+                Synchronous callback that properly handles async operations.
+                This approach minimizes blocking while ensuring proper message handling.
+                """
                 try:
-                    if callback:
-                        # If callback is async, we need to run it in an event loop
-                        if asyncio.iscoroutinefunction(callback):
-                            asyncio.create_task(self._handle_async_callback(callback, message))
+                    if callback and asyncio.iscoroutinefunction(callback):
+                        # Schedule async callback in the event loop without blocking
+                        if self._loop and not self._loop.is_closed():
+                            future = asyncio.run_coroutine_threadsafe(
+                                self._handle_async_callback(callback, message), 
+                                self._loop
+                            )
+                            # Don't wait for completion to avoid blocking
+                            # The message will be acked/nacked in the async handler
                         else:
-                            callback(message)
-                            message.ack()
+                            logger.error("[PubSub] Event loop not available for async callback")
+                            message.nack()
+                    elif callback:
+                        # Synchronous callback
+                        callback(message)
+                        message.ack()
                     else:
-                        # Handle sync version of default handler
+                        # Use sync default handler
                         self._default_message_handler_sync(message)
                         message.ack()
                 except Exception as e:
-                    logger.error(f"[PubSub] Error processing message: {e}")
+                    logger.error(f"[PubSub] Error in message callback: {e}")
                     message.nack()
 
-            # Start streaming pull
+            # Start streaming pull with flow control
             flow_control = pubsub_v1.types.FlowControl(
                 max_messages=100,  # Number of messages to buffer
                 max_bytes=10 * 1024 * 1024  # 10MB
@@ -109,10 +132,11 @@ class PubSubClient:
                     asyncio.create_task(self.start_listening(callback))
 
     async def _handle_async_callback(self, callback, message):
-        """Handle async callback in a proper async context."""
+        """Handle async callback in a proper async context with proper error handling."""
         try:
             await callback(message)
             message.ack()
+            logger.debug("[PubSub] Successfully processed message asynchronously")
         except Exception as e:
             logger.error(f"[PubSub] Error in async callback: {e}")
             message.nack()
@@ -135,10 +159,6 @@ class PubSubClient:
             logger.error(f"[PubSub] Failed to process message: {e}")
             raise
 
-    async def _default_message_handler(self, message):
-        """Default handler for Pub/Sub messages."""
-        return self._default_message_handler_sync(message)
-
     def stop(self):
         """Stop listening for messages."""
         self._running = False
@@ -146,6 +166,9 @@ class PubSubClient:
             self._streaming_pull_future.cancel()
         if self._subscriber:
             self._subscriber.close()
+        # Shutdown the thread pool executor
+        if self._executor:
+            self._executor.shutdown(wait=False)
         logger.info("[PubSub] Stopping gRPC message listener...")
             
     async def cleanup(self) -> None:
