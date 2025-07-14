@@ -22,6 +22,10 @@ from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
 from google.auth.transport.requests import Request
 import time
+import google.auth.credentials
+import google.oauth2.credentials
+from google.cloud import pubsub_v1
+from google.api_core import retry
 
 # Load environment variables from .env file
 load_dotenv()
@@ -435,120 +439,115 @@ class NestAPI:
 
 # Section 4.5: Pub/Sub Event Handler
 class PubSubClient:
-    """Google Cloud Pub/Sub client for real-time Nest events using HTTP API."""
+    """Google Cloud Pub/Sub client for real-time Nest events using gRPC streaming pull."""
     def __init__(self, project_id: str, subscription_id: str, token_manager: TokenManager):
         self.project_id = project_id
         self.subscription_id = subscription_id
         self.token_manager = token_manager
         self._running = False
+        self._subscriber = None
+        self._streaming_pull_future = None
         
-    async def _get_headers(self) -> Dict[str, str]:
-        """Get headers with a valid access token."""
+    async def _get_credentials(self) -> google.auth.credentials.Credentials:
+        """Get Google Auth credentials."""
         token = await self.token_manager.get_valid_token()
-        return {
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json"
-        }
-        
+        return google.oauth2.credentials.Credentials(
+            token,
+            token_uri='https://oauth2.googleapis.com/token',
+            client_id=self.token_manager.client_id,
+            client_secret=self.token_manager.client_secret,
+            refresh_token=self.token_manager.refresh_token,
+            scopes=['https://www.googleapis.com/auth/pubsub']
+        )
+
     async def start_listening(self, callback=None):
-        """Start listening for Pub/Sub messages."""
+        """Start listening for Pub/Sub messages using gRPC streaming pull."""
         self._running = True
-        logger.info("[PubSub] Starting to listen for Nest events...")
-        consecutive_auth_failures = 0
-        max_auth_failures = 3
-        
-        async with httpx.AsyncClient(timeout=60.0, http2=True) as client:
-            while self._running:
-                try:
-                    # Pull messages from subscription
-                    headers = await self._get_headers()
-                    pull_url = f"https://pubsub.googleapis.com/v1/{self.subscription_id}:pull"
-                    pull_data = {
-                        "maxMessages": 10
-                    }
-                    
-                    response = await client.post(pull_url, headers=headers, json=pull_data)
-                    
-                    if response.status_code == 200:
-                        consecutive_auth_failures = 0  # Reset auth failure counter
-                        data = response.json()
-                        messages = data.get("receivedMessages", [])
-                        
-                        if messages:
-                            logger.info(f"[PubSub] Received {len(messages)} messages")
-                            
-                            # Process messages
-                            ack_ids = []
-                            for msg in messages:
-                                ack_ids.append(msg["ackId"])
-                                if callback:
-                                    await callback(msg)
-                                else:
-                                    await self._default_message_handler(msg)
-                            
-                            # Acknowledge messages
-                            if ack_ids:
-                                headers = await self._get_headers()
-                                ack_url = f"https://pubsub.googleapis.com/v1/{self.subscription_id}:acknowledge"
-                                ack_data = {"ackIds": ack_ids}
-                                ack_response = await client.post(ack_url, headers=headers, json=ack_data)
-                                if ack_response.status_code != 200:
-                                    logger.warning(f"[PubSub] Failed to acknowledge messages: {ack_response.status_code}")
-                        else:
-                            # No messages, wait a bit before next pull
-                            await asyncio.sleep(5)
-                            
-                    elif response.status_code == 401:
-                        consecutive_auth_failures += 1
-                        logger.warning(f"[PubSub] Authentication failed ({consecutive_auth_failures}/{max_auth_failures}) - refreshing token")
-                        
-                        if consecutive_auth_failures >= max_auth_failures:
-                            logger.error("[PubSub] Too many consecutive auth failures, stopping listener")
-                            break
-                            
-                        # Force token refresh
-                        try:
-                            await self.token_manager.force_refresh()
-                            await asyncio.sleep(5)  # Brief pause before retry
-                        except Exception as e:
-                            logger.error(f"[PubSub] Failed to refresh token: {e}")
-                            await asyncio.sleep(30)
-                    else:
-                        logger.warning(f"[PubSub] Pull request failed: {response.status_code} - {response.text}")
-                        await asyncio.sleep(10)
-                        
-                except asyncio.TimeoutError:
-                    logger.debug("[PubSub] Pull timeout, continuing...")
-                except Exception as e:
-                    logger.error(f"[PubSub] Error: {e}")
-                    await asyncio.sleep(10)
-    
-    async def _default_message_handler(self, message):
-        """Default handler for Pub/Sub messages."""
-        import base64
-        import json
+        logger.info("[PubSub] Starting to listen for Nest events using gRPC...")
         
         try:
-            # Decode message data
-            data = base64.b64decode(message["message"]["data"]).decode("utf-8")
-            event_data = json.loads(data)
+            # Create subscriber client with automatic token refresh
+            credentials = await self._get_credentials()
             
-            logger.info(f"[PubSub] Nest event: {event_data}")
+            self._subscriber = pubsub_v1.SubscriberClient(
+                credentials=credentials
+            )
+            
+            # Ensure subscription_id doesn't already contain the full path
+            clean_subscription_id = self.subscription_id.split('/')[-1] if '/' in self.subscription_id else self.subscription_id
+            
+            subscription_path = self._subscriber.subscription_path(
+                self.project_id, 
+                clean_subscription_id
+            )
+            logger.info(f"[PubSub] Using subscription path: {subscription_path}")
+
+            # Define message callback
+            async def message_callback(message):
+                try:
+                    if callback:
+                        await callback(message)
+                    else:
+                        await self._default_message_handler(message)
+                    message.ack()
+                except Exception as e:
+                    logger.error(f"[PubSub] Error processing message: {e}")
+                    message.nack()
+
+            # Start streaming pull
+            flow_control = pubsub_v1.types.FlowControl(
+                max_messages=100,  # Number of messages to buffer
+                max_bytes=10 * 1024 * 1024  # 10MB
+            )
+
+            self._streaming_pull_future = self._subscriber.subscribe(
+                subscription_path,
+                callback=message_callback,
+                flow_control=flow_control
+            )
+
+            # Wait for the streaming pull to complete or be cancelled
+            await self._streaming_pull_future.result()
+
+        except Exception as e:
+            logger.error(f"[PubSub] Error in gRPC streaming pull: {e}")
+            if self._running:
+                # If the error is related to invalid resource name, stop retrying
+                if "Invalid resource name given" in str(e):
+                    logger.error("[PubSub] Invalid subscription configuration. Please check your subscription ID.")
+                    self._running = False
+                else:
+                    # For other errors, attempt to reconnect after a delay
+                    await asyncio.sleep(5)
+                    asyncio.create_task(self.start_listening(callback))
+
+    async def _default_message_handler(self, message):
+        """Default handler for Pub/Sub messages."""
+        try:
+            # Parse message data
+            data = json.loads(message.data.decode("utf-8"))
+            
+            logger.info(f"[PubSub] Nest event: {data}")
             
             # Extract device info
-            if "resourceUpdate" in event_data:
-                resource = event_data["resourceUpdate"]
+            if "resourceUpdate" in data:
+                resource = data["resourceUpdate"]
                 device_name = resource.get("name", "Unknown")
                 traits = resource.get("traits", {})
                 logger.info(f"[PubSub] Device {device_name} updated: {traits}")
                 
         except Exception as e:
             logger.error(f"[PubSub] Failed to process message: {e}")
-    
+            raise
+
     def stop(self):
         """Stop listening for messages."""
         self._running = False
-        logger.info("[PubSub] Stopping message listener...")
+        if self._streaming_pull_future:
+            self._streaming_pull_future.cancel()
+        if self._subscriber:
+            self._subscriber.close()
+        logger.info("[PubSub] Stopping gRPC message listener...")
 
 # Section 5: Controller Class
 class Controller:
