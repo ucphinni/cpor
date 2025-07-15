@@ -1,7 +1,7 @@
 """Retry utilities for the application."""
 import asyncio
 from functools import wraps
-from typing import Type, Callable, Any, Optional, Union
+from typing import Type, Callable, Any, Optional
 from google.api_core import retry as google_retry
 
 def with_retry(

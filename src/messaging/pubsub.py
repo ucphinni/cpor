@@ -1,8 +1,7 @@
 """Google Cloud Pub/Sub client implementation."""
 import asyncio
 import json
-import threading
-from typing import Optional, Callable, Any
+from typing import Optional
 from concurrent.futures import ThreadPoolExecutor
 from google.cloud import pubsub_v1
 import google.auth.credentials
@@ -116,8 +115,20 @@ class PubSubClient:
                 flow_control=flow_control
             )
 
-            # Wait for the streaming pull to complete or be cancelled
-            await self._streaming_pull_future.result()
+            logger.info("[PubSub] Streaming pull started, listening for messages...")
+            
+            # Keep the async task alive while running
+            try:
+                while self._running:
+                    await asyncio.sleep(1)  # Check every second if we should keep running
+                    
+            except asyncio.CancelledError:
+                logger.info("[PubSub] Streaming pull cancelled")
+                self._streaming_pull_future.cancel()
+                raise
+            finally:
+                if self._streaming_pull_future:
+                    self._streaming_pull_future.cancel()
 
         except Exception as e:
             logger.error(f"[PubSub] Error in gRPC streaming pull: {e}")

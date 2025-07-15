@@ -17,17 +17,21 @@ NEST_REFRESH_TOKEN = str(os.getenv("NEST_REFRESH_TOKEN"))
 NEST_API_URL = "https://smartdevicemanagement.googleapis.com/v1"
 
 # MQTT settings
-MQTT_BROKER = str(os.getenv("MQTT_BROKER", "192.168.8.241"))
+MQTT_BROKER = os.getenv("MQTT_BROKER", "192.168.8.241")
 MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
-MQTT_USER = str(os.getenv("MQTT_USER", "mqtt"))
-MQTT_PASSWORD = str(os.getenv("MQTT_PASSWORD", "mqtt"))
+MQTT_USER = os.getenv("MQTT_USER", "mqtt")
+MQTT_PASSWORD = os.getenv("MQTT_PASSWORD", "mqtt")  
 MQTT_USE_SSL = os.getenv("MQTT_USE_SSL", "false").lower() == "true"
-MQTT_TOPIC = str(os.getenv("MQTT_TOPIC", "home/+/temperature"))
-MQTT_CLIENT_ID = str(os.getenv("MQTT_CLIENT_ID", "mvp2_client_cote"))
+MQTT_TOPIC = os.getenv("MQTT_TOPIC", "home/+/temperature")
+MQTT_CLIENT_ID = os.getenv("MQTT_CLIENT_ID", "mvp2_client_cote")
 
 # Google Cloud Pub/Sub settings
 GCP_PROJECT_ID = str(os.getenv("GCP_PROJECT_ID"))
 PUBSUB_SUBSCRIPTION_ID = str(os.getenv("PUBSUB_SUBSCRIPTION_ID"))
+
+# Zigbee2MQTT top-level topics (comma-separated)
+ZIGBEE2MQTT_TOPICS = os.getenv("ZIGBEE2MQTT_TOPICS", "zigbee2mqtt").split(",")
+ZIGBEE2MQTT_TOPICS = [t.strip() for t in ZIGBEE2MQTT_TOPICS if t.strip()]
 
 # Validate required environment variables
 _required_env_vars = [

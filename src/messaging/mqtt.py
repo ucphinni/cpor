@@ -1,5 +1,5 @@
 """MQTT client implementation."""
-from typing import Optional, Callable, Dict, Any
+from typing import Optional, Callable, Dict, Any, Union, Awaitable
 import asyncio
 import json
 from gmqtt import Client as GMQTTClient  # type: ignore
@@ -28,14 +28,29 @@ class MQTTHandler:
         self.password = password
         self.use_ssl = use_ssl
         self.topic = topic
-        self.client = GMQTTClient("mqtt_handler")
+        self.client: Optional[GMQTTClient] = None
         
-        if username and password:
-            self.client.set_auth_credentials(username, password)
+        try:
+            self.client = GMQTTClient("mqtt_handler")
+            logger.info(f"[MQTT] Created MQTT client: {type(self.client)}")
+            
+            if self.client is None:
+                raise ValueError("GMQTTClient returned None")
+                
+            if username and password:
+                self.client.set_auth_credentials(username, password)
+                logger.info(f"[MQTT] Set auth credentials for user: {username}")
+        except Exception as e:
+            logger.error(f"[MQTT] Failed to create MQTT client: {e}")
+            self.client = None
+            raise
             
     @with_retry(max_retries=3, exceptions=(Exception,))
     async def connect(self) -> None:
         """Connect to MQTT broker."""
+        if not self.client:
+            raise ValueError("MQTT client is not initialized")
+            
         try:
             await self.client.connect(
                 self.broker,
@@ -49,6 +64,10 @@ class MQTTHandler:
             
     async def disconnect(self) -> None:
         """Disconnect from MQTT broker."""
+        if not self.client:
+            logger.warning("[MQTT] Cannot disconnect: client is not initialized")
+            return
+            
         try:
             await self.client.disconnect()
             logger.info("[MQTT] Disconnected from broker")
@@ -73,7 +92,10 @@ class MQTTClient:
         password: Optional[str] = MQTT_PASSWORD,
         use_ssl: bool = MQTT_USE_SSL,
         topic: str = MQTT_TOPIC,
-        change_callback: Optional[Callable[[str, Any, Any], None]] = None
+        change_callback: Optional[Union[
+            Callable[[str, Any, Any], None],
+            Callable[[str, Any, Any], Awaitable[None]]
+        ]] = None
     ):
         """Initialize MQTT client with change detection."""
         self._handler = MQTTHandler(
@@ -86,16 +108,20 @@ class MQTTClient:
         )
         self._stopping = False
         self._change_callback = change_callback
+        self._handlers_setup = False
         
         # Last value cache for change detection
         self._last_values: Dict[str, Any] = {}
-        
-        # Set up MQTT event handlers
-        self._setup_handlers()
 
     def _setup_handlers(self):
         """Set up MQTT client event handlers."""
-        @self._handler.client.on_connect()
+        if self._handlers_setup:
+            return
+        
+        if not self._handler.client:
+            logger.error("[MQTT] Cannot setup handlers: MQTT client is None")
+            raise ValueError("MQTT client is not initialized")
+            
         def on_connect(client, flags, rc, properties):
             logger.info(f"[MQTT] Connected with result code {rc}")
             # Subscribe to topics after connection
@@ -103,7 +129,6 @@ class MQTTClient:
                 client.subscribe(self._handler.topic, qos=1)
                 logger.info(f"[MQTT] Subscribed to topic: {self._handler.topic}")
 
-        @self._handler.client.on_message()
         def on_message(client, topic, payload, qos, properties):
             """Handle incoming MQTT messages with change detection."""
             try:
@@ -141,15 +166,24 @@ class MQTTClient:
             except Exception as e:
                 logger.error(f"[MQTT] Error processing message on {topic}: {e}")
 
-        @self._handler.client.on_disconnect()
         def on_disconnect(client, packet, exc=None):
             logger.warning("[MQTT] Disconnected from broker")
 
-        @self._handler.client.on_subscribe()
         def on_subscribe(client, mid, qos, properties):
             logger.info(f"[MQTT] Subscription confirmed with QoS {qos}")
+            
+        # Register handlers using the proper gmqtt syntax
+        self._handler.client.on_connect = on_connect
+        self._handler.client.on_message = on_message
+        self._handler.client.on_disconnect = on_disconnect
+        self._handler.client.on_subscribe = on_subscribe
+            
+        self._handlers_setup = True
 
-    def set_change_callback(self, callback: Callable[[str, Any, Any], None]):
+    def set_change_callback(self, callback: Union[
+        Callable[[str, Any, Any], None],
+        Callable[[str, Any, Any], Awaitable[None]]
+    ]):
         """Set or update the change detection callback."""
         self._change_callback = callback
 
@@ -161,8 +195,30 @@ class MQTTClient:
         """Get all last known values."""
         return self._last_values.copy()
 
+    async def subscribe(self, topic: str, qos: int = 1) -> None:
+        """Subscribe to an MQTT topic."""
+        if not self._handler.client:
+            logger.error("[MQTT] Cannot subscribe: client is not initialized")
+            raise ValueError("MQTT client is not initialized")
+            
+        # Ensure client is connected before subscribing
+        if not hasattr(self._handler.client, '_connection') or self._handler.client._connection is None:
+            logger.info("[MQTT] Client not connected, connecting first...")
+            await self.connect()
+            
+        try:
+            self._handler.client.subscribe(topic, qos=qos)
+            logger.info(f"[MQTT] Subscribed to topic: {topic}")
+        except Exception as e:
+            logger.error(f"[MQTT] Failed to subscribe to {topic}: {e}")
+            raise
+
     async def publish(self, topic: str, payload: Any, qos: int = 1, retain: bool = False) -> None:
         """Publish a message to MQTT broker."""
+        if not self._handler.client:
+            logger.error("[MQTT] Cannot publish: client is not initialized")
+            raise ValueError("MQTT client is not initialized")
+            
         try:
             # Convert payload to string if needed
             if isinstance(payload, (dict, list)):
@@ -187,6 +243,8 @@ class MQTTClient:
     @with_retry(max_retries=3, exceptions=(Exception,))
     async def connect(self) -> None:
         """Connect to the MQTT broker."""
+        # Set up handlers before connecting
+        self._setup_handlers()
         await self._handler.connect()
             
     async def run_forever(self) -> None:

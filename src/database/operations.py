@@ -54,6 +54,32 @@ class Database:
             for house in houses:
                 logger.info(f"[DB] House: id={house.id}, name={house.name}, desc={house.description}")
             return houses
+
+    @with_retry(max_retries=3)
+    async def update_device_state(self, device_id: str, state: dict) -> None:
+        """Update device state in the database."""
+        async with self.SessionLocal() as session:
+            # For now, just log the device state update
+            # In a real implementation, you'd have a Device table
+            logger.info(f"[DB] Updated device {device_id} state: {state}")
+            # TODO: Implement actual device state storage
+
+    @with_retry(max_retries=3)
+    async def store_nest_event(self, device_name: str, traits: dict) -> None:
+        """Store Nest device event in the database."""
+        async with self.SessionLocal() as session:
+            # For now, just log the nest event
+            # In a real implementation, you'd have a NestEvent table
+            logger.info(f"[DB] Stored Nest event for {device_name}: {traits}")
+            # TODO: Implement actual Nest event storage
+
+    async def connect(self) -> None:
+        """Connect to the database (initialize)."""
+        await self.init_db()
+
+    async def disconnect(self) -> None:
+        """Disconnect from the database (cleanup)."""
+        await self.cleanup()
             
     async def cleanup(self) -> None:
         """Clean up database resources."""

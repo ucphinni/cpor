@@ -7,6 +7,9 @@ from src.messaging.pubsub import PubSubClient
 from src.database.operations import Database
 from src.auth.token_manager import TokenManager
 from src.utils.logging import logger
+from src.config.settings import (
+    NEST_CLIENT_ID, NEST_CLIENT_SECRET, NEST_REFRESH_TOKEN
+)
 
 class SmartHomeController:
     """
@@ -19,7 +22,11 @@ class SmartHomeController:
     """
     
     def __init__(self):
-        self.token_manager = TokenManager()
+        self.token_manager = TokenManager(
+            client_id=NEST_CLIENT_ID,
+            client_secret=NEST_CLIENT_SECRET,
+            refresh_token=NEST_REFRESH_TOKEN
+        )
         self.database = Database()
         self.pubsub_client = PubSubClient(token_manager=self.token_manager)
         
