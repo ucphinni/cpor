@@ -1,7 +1,8 @@
 """MQTT client implementation."""
-from typing import Optional, Callable, Dict, Any, Union, Awaitable
+from typing import List, Optional, Callable, Dict, Any, Union, Awaitable
 import asyncio
 import json
+import traceback
 from gmqtt import Client as GMQTTClient  # type: ignore
 from gmqtt.mqtt.constants import MQTTv311
 from ..utils.logging import logger
@@ -10,6 +11,7 @@ from ..config.settings import (
     MQTT_BROKER, MQTT_PORT, MQTT_USER, MQTT_PASSWORD,
     MQTT_USE_SSL, MQTT_TOPIC
 )
+from ..utils.zigbee import extract_zigbee_friendly_name, register_broker_topics
 
 class MQTTHandler:
     """MQTT connection handler."""
@@ -28,61 +30,40 @@ class MQTTHandler:
         self.password = password
         self.use_ssl = use_ssl
         self.topic = topic
-        self.client: Optional[GMQTTClient] = None
-        
-        try:
-            self.client = GMQTTClient("mqtt_handler")
-            logger.info(f"[MQTT] Created MQTT client: {type(self.client)}")
-            
-            if self.client is None:
-                raise ValueError("GMQTTClient returned None")
-                
-            if username and password:
-                self.client.set_auth_credentials(username, password)
-                logger.info(f"[MQTT] Set auth credentials for user: {username}")
-        except Exception as e:
-            logger.error(f"[MQTT] Failed to create MQTT client: {e}")
-            self.client = None
-            raise
-            
+        self.client: GMQTTClient = GMQTTClient(client_id=self.username or "cpor-client")
+        if self.username and self.password:
+            self.client.set_auth_credentials(self.username, self.password)
+        logger.info(f"[MQTT] Created MQTT client: {type(self.client)}")
+
     @with_retry(max_retries=3, exceptions=(Exception,))
     async def connect(self) -> None:
-        """Connect to MQTT broker."""
-        if not self.client:
-            raise ValueError("MQTT client is not initialized")
-            
-        try:
-            await self.client.connect(
-                self.broker,
-                port=self.port,
-                ssl=self.use_ssl
-            )
-            logger.info(f"[MQTT] Connected to {self.broker}:{self.port}")
-        except Exception as e:
-            logger.error(f"[MQTT] Connection error: {e}")
-            raise
-            
+        """Connect to the MQTT broker."""
+        logger.info(f"[MQTT] Set auth credentials for user: {self.username}")
+        await self.client.connect(
+            self.broker,
+            port=self.port,
+            ssl=self.use_ssl,
+            version=MQTTv311
+        )
+        logger.info(f"[MQTT] Connected to {self.broker}:{self.port}")
+
     async def disconnect(self) -> None:
         """Disconnect from MQTT broker."""
-        if not self.client:
-            logger.warning("[MQTT] Cannot disconnect: client is not initialized")
-            return
-            
         try:
             await self.client.disconnect()
-            logger.info("[MQTT] Disconnected from broker")
+            logger.info(f"[MQTT] Disconnected from {self.broker}:{self.port}")
         except Exception as e:
-            logger.error(f"[MQTT] Disconnect error: {e}")
+            logger.error(f"[MQTT] Error during disconnect: {e}")
 
 class MQTTClient:
     """
-    MQTT client wrapper with async change detection and last value caching.
+    MQTT client wrapper for Zigbee2MQTT-focused async message handling.
     
     Features:
-    - Maintains last known values for all topics
-    - Detects changes and notifies controller
-    - Async message handling
-    - Automatic reconnection with retry logic
+    - Dedicated Zigbee2MQTT message handler
+    - All callbacks receive broker/client name, topic, decoded payload, and friendly_name
+    - No generic change detection or last-value caching
+    - Fully async event handlers
     """
     def __init__(
         self,
@@ -92,12 +73,11 @@ class MQTTClient:
         password: Optional[str] = MQTT_PASSWORD,
         use_ssl: bool = MQTT_USE_SSL,
         topic: str = MQTT_TOPIC,
-        change_callback: Optional[Union[
-            Callable[[str, Any, Any], None],
-            Callable[[str, Any, Any], Awaitable[None]]
-        ]] = None
+        zigbee2mqtt_callback: Optional[Callable[[str, str, Any, Optional[str]], Awaitable[None]]] = None,
+        zigbee2mqtt_topics: Optional[List[str]] = None,
+        broker_id: Optional[str] = None,
     ):
-        """Initialize MQTT client with change detection."""
+        """Initialize Zigbee2MQTT-focused MQTT client."""
         self._handler = MQTTHandler(
             broker=broker,
             port=port,
@@ -107,105 +87,103 @@ class MQTTClient:
             topic=topic
         )
         self._stopping = False
-        self._change_callback = change_callback
+        self._zigbee2mqtt_callback = zigbee2mqtt_callback
         self._handlers_setup = False
-        
-        # Last value cache for change detection
-        self._last_values: Dict[str, Any] = {}
+        self._broker_id = broker_id or broker
+        self._zigbee2mqtt_topics = zigbee2mqtt_topics or []
+        if self._zigbee2mqtt_topics:
+            register_broker_topics(self._broker_id, self._zigbee2mqtt_topics)
 
     def _setup_handlers(self):
-        """Set up MQTT client event handlers."""
+        """Set up MQTT client event handlers for Zigbee2MQTT."""
         if self._handlers_setup:
             return
-        
-        if not self._handler.client:
-            logger.error("[MQTT] Cannot setup handlers: MQTT client is None")
-            raise ValueError("MQTT client is not initialized")
-            
+        # Only on_message should be async; others must be sync
         def on_connect(client, flags, rc, properties):
-            logger.info(f"[MQTT] Connected with result code {rc}")
-            # Subscribe to topics after connection
+            logger.info(f"[MQTT] on_connect called: rc={rc}, flags={flags}, properties={properties}")
+            client.broker_id = self._broker_id
             if self._handler.topic:
                 client.subscribe(self._handler.topic, qos=1)
                 logger.info(f"[MQTT] Subscribed to topic: {self._handler.topic}")
-
-        def on_message(client, topic, payload, qos, properties):
-            """Handle incoming MQTT messages with change detection."""
+        async def on_message(client, topic, payload, qos, properties):
+            logger.info(f"[MQTT] on_message called: topic={topic}, qos={qos}, properties={properties}")
             try:
-                # Decode message
-                message_str = payload.decode('utf-8')
-                
-                # Try to parse as JSON, fallback to string
-                try:
-                    current_value = json.loads(message_str)
-                except json.JSONDecodeError:
-                    current_value = message_str
-                
-                # Check if value changed
-                last_value = self._last_values.get(topic)
-                
-                if last_value != current_value:
-                    # Value changed - update cache and notify
-                    self._last_values[topic] = current_value
-                    
-                    logger.info(f"[MQTT] Change detected on {topic}: {last_value} -> {current_value}")
-                    
-                    # Notify controller of change (async callback)
-                    if self._change_callback:
-                        # Schedule async callback if it's a coroutine
-                        if asyncio.iscoroutinefunction(self._change_callback):
-                            asyncio.create_task(
-                                self._change_callback(topic, last_value, current_value)
-                            )
-                        else:
-                            # Call sync callback directly
-                            self._change_callback(topic, last_value, current_value)
+                broker_id = getattr(client, "broker_id", None)
+                friendly_name = None
+                if broker_id is not None:
+                    friendly_name = extract_zigbee_friendly_name(topic, broker_id)
+                logger.debug(f"[MQTT] Received message on {topic}: type={type(payload)}, value={payload}, friendly_name={friendly_name}, broker_id={broker_id}")
+                decoded_payload = None
+                if payload is None:
+                    decoded_payload = {"event": "offline"}
+                elif isinstance(payload, dict):
+                    decoded_payload = payload
+                elif isinstance(payload, bytes):
+                    try:
+                        message_str = payload.decode('utf-8')
+                        try:
+                            decoded_payload = json.loads(message_str)
+                        except json.JSONDecodeError:
+                            decoded_payload = message_str
+                    except Exception as e:
+                        logger.error(f"[MQTT] Error decoding bytes payload on {topic}: {e}", exc_info=True)
+                        decoded_payload = str(payload)
+                elif isinstance(payload, str):
+                    try:
+                        decoded_payload = json.loads(payload)
+                    except json.JSONDecodeError:
+                        decoded_payload = payload
                 else:
-                    logger.debug(f"[MQTT] No change on {topic}: {current_value}")
-                    
+                    decoded_payload = str(payload)
+                if self._zigbee2mqtt_callback is not None:
+                    try:
+                        safe_broker_id = broker_id if broker_id is not None else ""
+                        logger.info(f"[MQTT] Invoking zigbee2mqtt_callback for topic={topic}")
+                        result = self._zigbee2mqtt_callback(safe_broker_id, topic, decoded_payload, friendly_name)
+                        if asyncio.iscoroutine(result):
+                            await result
+                    except Exception as cb_exc:
+                        logger.error(f"[MQTT] Zigbee2MQTT callback error on {topic}: {cb_exc}", exc_info=True)
             except Exception as e:
-                logger.error(f"[MQTT] Error processing message on {topic}: {e}")
-
+                logger.error(f"[MQTT] Unhandled error processing Zigbee2MQTT message on {topic}: {e}", exc_info=True)
+            return 0
         def on_disconnect(client, packet, exc=None):
+            logger.info(f"[MQTT] on_disconnect called: packet={packet}, exc={exc}")
             logger.warning("[MQTT] Disconnected from broker")
-
         def on_subscribe(client, mid, qos, properties):
+            logger.info(f"[MQTT] on_subscribe called: mid={mid}, qos={qos}, properties={properties}")
             logger.info(f"[MQTT] Subscription confirmed with QoS {qos}")
-            
-        # Register handlers using the proper gmqtt syntax
         self._handler.client.on_connect = on_connect
         self._handler.client.on_message = on_message
         self._handler.client.on_disconnect = on_disconnect
         self._handler.client.on_subscribe = on_subscribe
-            
         self._handlers_setup = True
 
-    def set_change_callback(self, callback: Union[
-        Callable[[str, Any, Any], None],
-        Callable[[str, Any, Any], Awaitable[None]]
-    ]):
-        """Set or update the change detection callback."""
-        self._change_callback = callback
+    def set_zigbee2mqtt_callback(self, callback: Callable[[str, str, Any, Optional[str]], Awaitable[None]]) -> None:
+        """
+        Set or update the Zigbee2MQTT event callback.
+        Callback signature: (broker/client name, topic, decoded payload, friendly_name)
+        """
+        self._zigbee2mqtt_callback = callback
 
-    def get_last_value(self, topic: str) -> Optional[Any]:
-        """Get the last known value for a topic."""
-        return self._last_values.get(topic)
-
-    def get_all_values(self) -> Dict[str, Any]:
-        """Get all last known values."""
-        return self._last_values.copy()
+    # Utility for wrapping sync grpc calls if needed
+    @staticmethod
+    async def run_sync_in_executor(func: Callable, *args, **kwargs) -> Any:
+        """
+        Run a sync function in an executor from async context.
+        Use for grpc thermostat operations that must be sync.
+        """
+        loop = asyncio.get_running_loop()
+        return await loop.run_in_executor(None, func, *args, **kwargs)
 
     async def subscribe(self, topic: str, qos: int = 1) -> None:
         """Subscribe to an MQTT topic."""
         if not self._handler.client:
             logger.error("[MQTT] Cannot subscribe: client is not initialized")
             raise ValueError("MQTT client is not initialized")
-            
-        # Ensure client is connected before subscribing
         if not hasattr(self._handler.client, '_connection') or self._handler.client._connection is None:
             logger.info("[MQTT] Client not connected, connecting first...")
             await self.connect()
-            
         try:
             self._handler.client.subscribe(topic, qos=qos)
             logger.info(f"[MQTT] Subscribed to topic: {topic}")
@@ -218,34 +196,28 @@ class MQTTClient:
         if not self._handler.client:
             logger.error("[MQTT] Cannot publish: client is not initialized")
             raise ValueError("MQTT client is not initialized")
-            
         try:
-            # Convert payload to string if needed
             if isinstance(payload, (dict, list)):
                 message = json.dumps(payload)
             else:
                 message = str(payload)
-            
             self._handler.client.publish(topic, message, qos=qos, retain=retain)
             logger.debug(f"[MQTT] Published to {topic}: {message}")
-            
-            # Update our own cache for published messages
-            try:
-                parsed_payload = json.loads(message) if isinstance(payload, (dict, list)) else payload
-                self._last_values[topic] = parsed_payload
-            except:
-                self._last_values[topic] = payload
-                
         except Exception as e:
             logger.error(f"[MQTT] Failed to publish to {topic}: {e}")
-            raise
 
     @with_retry(max_retries=3, exceptions=(Exception,))
     async def connect(self) -> None:
         """Connect to the MQTT broker."""
-        # Set up handlers before connecting
         self._setup_handlers()
-        await self._handler.connect()
+        logger.info(f"[MQTT] Connecting to {self._handler.broker}:{self._handler.port} with protocol MQTTv311...")
+        await self._handler.client.connect(
+            self._handler.broker,
+            port=self._handler.port,
+            ssl=self._handler.use_ssl,
+            version=MQTTv311
+        )
+        logger.info(f"[MQTT] Connected to {self._handler.broker}:{self._handler.port}")
             
     async def run_forever(self) -> None:
         """Keep the MQTT connection alive and handle messages."""

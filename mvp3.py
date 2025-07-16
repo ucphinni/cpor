@@ -73,32 +73,38 @@ async def fetch_nest_periodically(nest_api: NestAPI) -> None:
         await asyncio.sleep(300)  # 5 minutes
 
 class ZigbeeDiscovery:
-    def __init__(self, mqtt_client, topics):
+    def __init__(self, mqtt_client: MQTTClient, topics: list[str]):
         self.mqtt_client = mqtt_client
         self.topics = topics
-        self.devices = {}
+        self.devices: dict[str, dict] = {}
 
-    async def start(self):
-        # Subscribe to bridge/devices for each top-level topic
+    async def start(self) -> None:
         for base in self.topics:
             await self.mqtt_client.subscribe(f"{base}/bridge/devices")
             await self.mqtt_client.subscribe(f"{base}/#")
         logger.info(f"[Zigbee] Subscribed to: {[f'{base}/#' for base in self.topics]} and bridge/devices")
 
-    async def handle_message(self, topic, payload):
+    async def handle_message(self, broker_id: str, topic: str, payload: object, friendly_name: str | None) -> None:
         # Device list update
         for base in self.topics:
             if topic == f"{base}/bridge/devices":
                 try:
-                    devices = json.loads(payload)
-                    self.devices = {d['friendly_name']: d for d in devices}
+                    if isinstance(payload, str):
+                        devices = json.loads(payload)
+                    elif isinstance(payload, list):
+                        devices = payload
+                    elif isinstance(payload, dict) and "devices" in payload:
+                        devices = payload["devices"]
+                    else:
+                        devices = []
+                    self.devices = {d['friendly_name']: d for d in devices if 'friendly_name' in d}
                     logger.info(f"[Zigbee] Discovered devices: {list(self.devices.keys())}")
                 except Exception as e:
                     logger.error(f"[Zigbee] Failed to parse device list: {e}")
                 return
             # Device payloads
             if topic.startswith(f"{base}/") and not topic.startswith(f"{base}/bridge/"):
-                device_name = topic[len(f"{base}/"):].split("/")[0]
+                device_name = friendly_name or topic[len(f"{base}/"):].split("/")[0]
                 logger.info(f"[Zigbee] Device update: {device_name} | Topic: {topic} | Payload: {payload}")
                 # Optionally update state, database, etc.
 
@@ -125,16 +131,14 @@ async def run() -> None:
         await db.add_house("My House", "Primary residence")
         await db.list_houses()
         
-        # Initialize MQTT client
-        mqtt_client = MQTTClient()
-        zigbee_discovery = ZigbeeDiscovery(mqtt_client, ZIGBEE2MQTT_TOPICS)
+        zigbee_discovery = ZigbeeDiscovery(mqtt_client=None, topics=ZIGBEE2MQTT_TOPICS)  # type: ignore
+        mqtt_client = MQTTClient(
+            zigbee2mqtt_callback=zigbee_discovery.handle_message,
+            zigbee2mqtt_topics=ZIGBEE2MQTT_TOPICS
+        )
+        zigbee_discovery.mqtt_client = mqtt_client
         await zigbee_discovery.start()
 
-        # Patch MQTT client to call zigbee discovery handler
-        def zigbee_message_handler(topic, payload, client):
-            asyncio.create_task(zigbee_discovery.handle_message(topic, payload.decode('utf-8')))
-        mqtt_client.set_change_callback(zigbee_message_handler)
-        
         pubsub_client = PubSubClient(
             project_id=GCP_PROJECT_ID,
             subscription_id=PUBSUB_SUBSCRIPTION_ID,
