@@ -7,10 +7,7 @@ from gmqtt import Client as GMQTTClient  # type: ignore
 from gmqtt.mqtt.constants import MQTTv311
 from ..utils.logging import logger
 from ..utils.retry import with_retry
-from ..config.settings import (
-    MQTT_BROKER, MQTT_PORT, MQTT_USER, MQTT_PASSWORD,
-    MQTT_USE_SSL, MQTT_TOPIC
-)
+from ..config.settings import BROKER_CONFIGS
 from ..utils.zigbee import extract_zigbee_friendly_name, register_broker_topics
 
 class MQTTHandler:
@@ -67,15 +64,16 @@ class MQTTClient:
     """
     def __init__(
         self,
-        broker: str = MQTT_BROKER,
-        port: int = MQTT_PORT,
-        username: Optional[str] = MQTT_USER,
-        password: Optional[str] = MQTT_PASSWORD,
-        use_ssl: bool = MQTT_USE_SSL,
-        topic: str = MQTT_TOPIC,
+        broker: str,
+        port: int = 1883,
+        username: Optional[str] = None,
+        password: Optional[str] = None,
+        use_ssl: bool = False,
+        topic: str = "#",
         zigbee2mqtt_callback: Optional[Callable[[str, str, Any, Optional[str]], Awaitable[None]]] = None,
         zigbee2mqtt_topics: Optional[List[str]] = None,
         broker_id: Optional[str] = None,
+        mqtt_version: int = 311,
     ):
         """Initialize Zigbee2MQTT-focused MQTT client."""
         self._handler = MQTTHandler(
@@ -86,11 +84,13 @@ class MQTTClient:
             use_ssl=use_ssl,
             topic=topic
         )
+        self._mqtt_version = mqtt_version
         self._stopping = False
         self._zigbee2mqtt_callback = zigbee2mqtt_callback
         self._handlers_setup = False
         self._broker_id = broker_id or broker
         self._zigbee2mqtt_topics = zigbee2mqtt_topics or []
+        self._unsubscribed_topics = set()
         if self._zigbee2mqtt_topics:
             register_broker_topics(self._broker_id, self._zigbee2mqtt_topics)
 
@@ -107,6 +107,24 @@ class MQTTClient:
                 logger.info(f"[MQTT] Subscribed to topic: {self._handler.topic}")
         async def on_message(client, topic, payload, qos, properties):
             logger.info(f"[MQTT] on_message called: topic={topic}, qos={qos}, properties={properties}")
+            # Unsubscribe from bridge/devices and bridge/availability after first message
+            for base in self._zigbee2mqtt_topics:
+                bridge_devices = f"{base}/bridge/devices"
+                bridge_availability = f"{base}/bridge/availability"
+                if topic == bridge_devices and topic not in self._unsubscribed_topics:
+                    try:
+                        client.unsubscribe(topic)
+                        self._unsubscribed_topics.add(topic)
+                        logger.info(f"[MQTT] Unsubscribed from topic: {topic}")
+                    except Exception as e:
+                        logger.error(f"[MQTT] Failed to unsubscribe from {topic}: {e}")
+                if topic == bridge_availability and topic not in self._unsubscribed_topics:
+                    try:
+                        client.unsubscribe(topic)
+                        self._unsubscribed_topics.add(topic)
+                        logger.info(f"[MQTT] Unsubscribed from topic: {topic}")
+                    except Exception as e:
+                        logger.error(f"[MQTT] Failed to unsubscribe from {topic}: {e}")
             try:
                 broker_id = getattr(client, "broker_id", None)
                 friendly_name = None
@@ -208,17 +226,23 @@ class MQTTClient:
 
     @with_retry(max_retries=3, exceptions=(Exception,))
     async def connect(self) -> None:
-        """Connect to the MQTT broker."""
+        """Connect to the MQTT broker and subscribe to broker-specific topics."""
         self._setup_handlers()
-        logger.info(f"[MQTT] Connecting to {self._handler.broker}:{self._handler.port} with protocol MQTTv311...")
+        logger.info(f"[MQTT] Connecting to {self._handler.broker}:{self._handler.port} with protocol MQTTv{self._mqtt_version}...")
         await self._handler.client.connect(
             self._handler.broker,
             port=self._handler.port,
             ssl=self._handler.use_ssl,
-            version=MQTTv311
+            version=self._mqtt_version
         )
         logger.info(f"[MQTT] Connected to {self._handler.broker}:{self._handler.port}")
-            
+        # Subscribe to broker-specific zigbee2mqtt topics
+        for base in self._zigbee2mqtt_topics:
+            self._handler.client.subscribe(f"{base}/bridge/devices", qos=1)
+            logger.info(f"[MQTT] Subscribed to topic: {base}/bridge/devices")
+            self._handler.client.subscribe(f"{base}/#", qos=1)
+            logger.info(f"[MQTT] Subscribed to topic: {base}/#")
+
     async def run_forever(self) -> None:
         """Keep the MQTT connection alive and handle messages."""
         # Connect first with retry
@@ -241,3 +265,80 @@ class MQTTClient:
     async def cleanup(self) -> None:
         """Clean up MQTT resources."""
         await self.stop()
+
+class MultiMQTTClient:
+    """
+    Multi-broker MQTT client manager. Instantiates and manages multiple MQTTClient instances, each with broker-specific Zigbee2MQTT topics.
+    """
+    def __init__(self, zigbee2mqtt_callback: Optional[Callable[[str, str, Any, Optional[str]], Awaitable[None]]] = None):
+        self.clients = []
+        
+        # Handle case where no brokers are configured
+        if not BROKER_CONFIGS:
+            logger.warning("[MQTT] No broker configurations found. MultiMQTTClient will have no active clients.")
+            return
+            
+        for idx, cfg in enumerate(BROKER_CONFIGS):
+            client = MQTTClient(
+                broker=cfg["broker"],
+                port=cfg["port"],
+                username=cfg["username"],
+                password=cfg["password"],
+                use_ssl=cfg["use_ssl"],
+                topic=cfg["topic"],
+                zigbee2mqtt_callback=zigbee2mqtt_callback,
+                zigbee2mqtt_topics=cfg["zigbee2mqtt_topics"],
+                broker_id=cfg["broker"],
+                mqtt_version=cfg.get("mqtt_version", 311),
+            )
+            self.clients.append(client)
+            logger.info(f"[MQTT] Created client for broker: {cfg['broker']}:{cfg['port']}")
+
+    async def connect_all(self) -> None:
+        """Connect all clients to their respective brokers."""
+        for client in self.clients:
+            await client.connect()
+
+    async def run_all_forever(self) -> None:
+        """Run all MQTT clients forever."""
+        if not self.clients:
+            logger.warning("[MQTT] No clients to run. Waiting indefinitely...")
+            try:
+                while True:
+                    await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                logger.info("[MQTT] MultiMQTTClient cancelled")
+            return
+            
+        async def run_single_client(client):
+            try:
+                await client.run_forever()
+            except Exception as e:
+                logger.error(f"[MQTT] Error in client {client._broker_id}: {e}")
+                raise
+        
+        # Use asyncio.gather instead of TaskGroup for broader compatibility
+        try:
+            await asyncio.gather(*[run_single_client(client) for client in self.clients])
+        except asyncio.CancelledError:
+            logger.info("[MQTT] MultiMQTTClient cancelled")
+            raise
+
+    async def stop_all(self) -> None:
+        """Stop all MQTT clients."""
+        for client in self.clients:
+            await client.stop()
+
+    async def cleanup(self) -> None:
+        """Clean up all MQTT clients."""
+        await self.stop_all()
+
+    async def publish_all(self, topic: str, payload: Any, qos: int = 1, retain: bool = False) -> None:
+        """Publish a message to all brokers."""
+        for client in self.clients:
+            await client.publish(topic, payload, qos=qos, retain=retain)
+
+    async def subscribe_all(self, topic: str, qos: int = 1) -> None:
+        """Subscribe to a topic on all brokers."""
+        for client in self.clients:
+            await client.subscribe(topic, qos=qos)

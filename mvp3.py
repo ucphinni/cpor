@@ -17,11 +17,11 @@ from src.utils.logging import logger, setup_logger
 from src.config.settings import (
     NEST_CLIENT_ID, NEST_CLIENT_SECRET, NEST_REFRESH_TOKEN,
     NEST_PROJECT_ID, GCP_PROJECT_ID, PUBSUB_SUBSCRIPTION_ID,
-    validate_config, ZIGBEE2MQTT_TOPICS
+    validate_config, BROKER_CONFIGS
 )
 from src.auth.token_manager import TokenManager
 from src.database.operations import Database
-from src.messaging.mqtt import MQTTClient
+from src.messaging.mqtt import MultiMQTTClient
 from src.messaging.pubsub import PubSubClient
 from src.nest.api import NestAPI
 
@@ -73,40 +73,50 @@ async def fetch_nest_periodically(nest_api: NestAPI) -> None:
         await asyncio.sleep(300)  # 5 minutes
 
 class ZigbeeDiscovery:
-    def __init__(self, mqtt_client: MQTTClient, topics: list[str]):
+    def __init__(self, mqtt_client: MultiMQTTClient):
         self.mqtt_client = mqtt_client
-        self.topics = topics
-        self.devices: dict[str, dict] = {}
+        self.devices: dict[str, dict[str, dict[str, dict]]] = {}
+        self.unsubscribe_bridge = True  # Set to True to unsubscribe from bridge topics after initial discovery
+        self._bridge_subscribed: set[tuple[str, str]] = set()  # (broker_id, topic)
 
     async def start(self) -> None:
-        for base in self.topics:
-            await self.mqtt_client.subscribe(f"{base}/bridge/devices")
-            await self.mqtt_client.subscribe(f"{base}/#")
-        logger.info(f"[Zigbee] Subscribed to: {[f'{base}/#' for base in self.topics]} and bridge/devices")
+        logger.info("[Zigbee] Discovery started. Subscriptions handled per client.")
 
     async def handle_message(self, broker_id: str, topic: str, payload: object, friendly_name: str | None) -> None:
-        # Device list update
-        for base in self.topics:
-            if topic == f"{base}/bridge/devices":
+        # Filter bridge topics
+        if "/bridge/" in topic:
+            if topic.endswith("/bridge/devices"):
                 try:
                     if isinstance(payload, str):
                         devices = json.loads(payload)
-                    elif isinstance(payload, list):
-                        devices = payload
-                    elif isinstance(payload, dict) and "devices" in payload:
-                        devices = payload["devices"]
                     else:
-                        devices = []
-                    self.devices = {d['friendly_name']: d for d in devices if 'friendly_name' in d}
-                    logger.info(f"[Zigbee] Discovered devices: {list(self.devices.keys())}")
+                        devices = payload
+                    if not isinstance(devices, list):
+                        # Try to extract 'devices' key if present
+                        if isinstance(devices, dict) and "devices" in devices:
+                            devices = devices["devices"]
+                        else:
+                            devices = []
+                    logger.info(f"[Zigbee] {broker_id}: {len(devices)} devices discovered.")
+                    if broker_id not in self.devices:
+                        self.devices[broker_id] = {}
+                    self.devices[broker_id][topic] = {d['friendly_name']: d for d in devices if isinstance(d, dict) and 'friendly_name' in d}
+                    # Unsubscribe from bridge/devices only
+                    if self.unsubscribe_bridge and (broker_id, topic) not in self._bridge_subscribed:
+                        self._bridge_subscribed.add((broker_id, topic))
+                        for client in self.mqtt_client.clients:
+                            if client._broker_id == broker_id:
+                                await client._handler.client.unsubscribe(topic)
+                                logger.info(f"[Zigbee] Unsubscribed from bridge topic: {topic} for broker {broker_id}")
                 except Exception as e:
-                    logger.error(f"[Zigbee] Failed to parse device list: {e}")
-                return
-            # Device payloads
-            if topic.startswith(f"{base}/") and not topic.startswith(f"{base}/bridge/"):
-                device_name = friendly_name or topic[len(f"{base}/"):].split("/")[0]
-                logger.info(f"[Zigbee] Device update: {device_name} | Topic: {topic} | Payload: {payload}")
-                # Optionally update state, database, etc.
+                    logger.error(f"[Zigbee] Failed to parse bridge/devices: {e}")
+            return
+        if topic.endswith("/availability"):
+            logger.info(f"[Zigbee] {broker_id}: {topic} availability: {payload}")
+            return
+        # All other topics (device data, sensor readings, etc.)
+        logger.info(f"[Zigbee] {broker_id}: Device data: {friendly_name or topic} | Payload: {payload}")
+        # Optionally process/store sensor data here
 
 async def run() -> None:
     """Main application entry point."""
@@ -131,10 +141,9 @@ async def run() -> None:
         await db.add_house("My House", "Primary residence")
         await db.list_houses()
         
-        zigbee_discovery = ZigbeeDiscovery(mqtt_client=None, topics=ZIGBEE2MQTT_TOPICS)  # type: ignore
-        mqtt_client = MQTTClient(
-            zigbee2mqtt_callback=zigbee_discovery.handle_message,
-            zigbee2mqtt_topics=ZIGBEE2MQTT_TOPICS
+        zigbee_discovery = ZigbeeDiscovery(mqtt_client=None)  # type: ignore
+        mqtt_client = MultiMQTTClient(
+            zigbee2mqtt_callback=zigbee_discovery.handle_message
         )
         zigbee_discovery.mqtt_client = mqtt_client
         await zigbee_discovery.start()
@@ -153,7 +162,7 @@ async def run() -> None:
         # Create background tasks (with MQTT and Zigbee discovery)
         tasks = [
             create_background_task(fetch_nest_periodically(nest_api), "nest_fetcher"),
-            create_background_task(mqtt_client.run_forever(), "mqtt_client"),
+            create_background_task(mqtt_client.run_all_forever(), "mqtt_client"),
             create_background_task(pubsub_client.start_listening(), "pubsub_listener")
         ]
         
@@ -182,6 +191,7 @@ async def run() -> None:
                 pubsub_client.cleanup(),
                 nest_api.close(),
                 db.cleanup(),
+                mqtt_client.cleanup(),
             ]
             
             await asyncio.gather(*cleanup_tasks, return_exceptions=True)
