@@ -1,0 +1,21 @@
+{
+    "DATABASE_URL": "sqlite+aiosqlite:///./test.db",
+    "NEST_PROJECT_ID": "<your-nest-project-id>",
+    "NEST_ACCESS_TOKEN": "<your-nest-access-token>",
+    "NEST_CLIENT_ID": "<your-nest-client-id>",
+    "NEST_CLIENT_SECRET": "<your-nest-client-secret>",
+    "NEST_REFRESH_TOKEN": "<your-nest-refresh-token>",
+    "MQTT_BROKERS": [
+        {
+            "broker": "<your-mqtt-broker>",
+            "port": 1883,
+            "user": "<your-mqtt-username>",
+            "password": "<your-mqtt-password>",
+            "client_id": "<your-mqtt-client-id>",
+            "version": 5,
+            "use_ssl": false
+        }
+    ],
+    "GCP_PROJECT_ID": "<your-gcp-project-id>",
+    "PUBSUB_SUBSCRIPTION_ID": "<your-pubsub-subscription-id>"
+}
