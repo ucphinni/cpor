@@ -102,29 +102,43 @@ class MQTTClient:
         def on_connect(client, flags, rc, properties):
             logger.info(f"[MQTT] on_connect called: rc={rc}, flags={flags}, properties={properties}")
             client.broker_id = self._broker_id
-            if self._handler.topic:
-                client.subscribe(self._handler.topic, qos=1)
-                logger.info(f"[MQTT] Subscribed to topic: {self._handler.topic}")
+            # Only subscribe to +/+/availability on connect
+            client.subscribe("+/+/availability", qos=1)
+            logger.info("[MQTT] Subscribed to topic: +/+/availability")
+        # Track device topic subscriptions to prevent duplicates
+        self._subscribed_device_topics = set()
         async def on_message(client, topic, payload, qos, properties):
             logger.info(f"[MQTT] on_message called: topic={topic}, qos={qos}, properties={properties}")
-            # Unsubscribe from bridge/devices and bridge/availability after first message
-            for base in self._zigbee2mqtt_topics:
-                bridge_devices = f"{base}/bridge/devices"
-                bridge_availability = f"{base}/bridge/availability"
-                if topic == bridge_devices and topic not in self._unsubscribed_topics:
-                    try:
-                        client.unsubscribe(topic)
-                        self._unsubscribed_topics.add(topic)
-                        logger.info(f"[MQTT] Unsubscribed from topic: {topic}")
-                    except Exception as e:
-                        logger.error(f"[MQTT] Failed to unsubscribe from {topic}: {e}")
-                if topic == bridge_availability and topic not in self._unsubscribed_topics:
-                    try:
-                        client.unsubscribe(topic)
-                        self._unsubscribed_topics.add(topic)
-                        logger.info(f"[MQTT] Unsubscribed from topic: {topic}")
-                    except Exception as e:
-                        logger.error(f"[MQTT] Failed to unsubscribe from {topic}: {e}")
+            parts = topic.split("/")
+            # Only handle availability messages from the +/+/availability subscription, not from device topic subscriptions
+            if len(parts) == 3 and parts[2] == "availability" and parts[1] != 'bridge' and topic not in self._subscribed_device_topics:
+                zigbee_base = parts[0]
+                device_id = parts[1]
+                state_str = str(payload).strip().lower()
+                if "online" in state_str:
+                    state = "online"
+                elif "offline" in state_str:
+                    state = "offline"
+                else:
+                    state = state_str
+                device_topic = f"{zigbee_base}/{device_id}/#"
+                if state == "online":
+                    if device_topic not in self._subscribed_device_topics:
+                        client.subscribe(device_topic, qos=1)
+                        self._subscribed_device_topics.add(device_topic)
+                        logger.info(f"[MQTT] Dynamically subscribed to device topic: {device_topic}")
+                    else:
+                        logger.debug(f"[MQTT] Already subscribed to device topic: {device_topic}")
+                    return
+                elif state == "offline":
+                    if device_topic in self._subscribed_device_topics:
+                        client.unsubscribe(device_topic)
+                        self._subscribed_device_topics.remove(device_topic)
+                        logger.info(f"[MQTT] Dynamically unsubscribed from device topic: {device_topic}")
+                    else:
+                        logger.debug(f"[MQTT] Already unsubscribed from device topic: {device_topic}")
+                    return
+            # ...existing message decoding and callback logic...
             try:
                 broker_id = getattr(client, "broker_id", None)
                 friendly_name = None
@@ -236,12 +250,9 @@ class MQTTClient:
             version=self._mqtt_version
         )
         logger.info(f"[MQTT] Connected to {self._handler.broker}:{self._handler.port}")
-        # Subscribe to broker-specific zigbee2mqtt topics
-        for base in self._zigbee2mqtt_topics:
-            self._handler.client.subscribe(f"{base}/bridge/devices", qos=1)
-            logger.info(f"[MQTT] Subscribed to topic: {base}/bridge/devices")
-            self._handler.client.subscribe(f"{base}/#", qos=1)
-            logger.info(f"[MQTT] Subscribed to topic: {base}/#")
+        # Subscribe only to '+/+/availability'
+        self._handler.client.subscribe("+/+/availability", qos=1)
+        logger.info("[MQTT] Subscribed to topic: +/+/availability")
 
     async def run_forever(self) -> None:
         """Keep the MQTT connection alive and handle messages."""
@@ -266,30 +277,57 @@ class MQTTClient:
         """Clean up MQTT resources."""
         await self.stop()
 
+    async def dynamic_subscribe(self, topic: str, qos: int = 1) -> None:
+        """Dynamically subscribe to a new MQTT topic."""
+        try:
+            if not hasattr(self._handler.client, '_connection') or self._handler.client._connection is None:
+                logger.info("[MQTT] Client not connected, connecting first...")
+                await self.connect()
+            self._handler.client.subscribe(topic, qos=qos)
+            logger.info(f"[MQTT] Dynamically subscribed to topic: {topic}")
+        except Exception as e:
+            logger.error(f"[MQTT] Failed to dynamically subscribe to {topic}: {e}")
+            raise
+
+    async def dynamic_unsubscribe(self, topic: str) -> None:
+        """Dynamically unsubscribe from an MQTT topic."""
+        try:
+            self._handler.client.unsubscribe(topic)
+            logger.info(f"[MQTT] Dynamically unsubscribed from topic: {topic}")
+        except Exception as e:
+            logger.error(f"[MQTT] Failed to dynamically unsubscribe from {topic}: {e}")
+            raise
+
+    async def _handle_unsubscription(self, client, topic: str) -> None:
+        """Handle unsubscription logic for specific topics."""
+        if topic not in self._unsubscribed_topics:
+            try:
+                client.unsubscribe(topic)
+                self._unsubscribed_topics.add(topic)
+                logger.info(f"[MQTT] Unsubscribed from topic: {topic}")
+            except Exception as e:
+                logger.error(f"[MQTT] Failed to unsubscribe from {topic}: {e}")
+
 class MultiMQTTClient:
     """
     Multi-broker MQTT client manager. Instantiates and manages multiple MQTTClient instances, each with broker-specific Zigbee2MQTT topics.
     """
     def __init__(self, zigbee2mqtt_callback: Optional[Callable[[str, str, Any, Optional[str]], Awaitable[None]]] = None):
         self.clients = []
-        
         # Handle case where no brokers are configured
         if not BROKER_CONFIGS:
             logger.warning("[MQTT] No broker configurations found. MultiMQTTClient will have no active clients.")
             return
-            
         for idx, cfg in enumerate(BROKER_CONFIGS):
             client = MQTTClient(
                 broker=cfg["broker"],
                 port=cfg["port"],
-                username=cfg["username"],
+                username=cfg["user"],
                 password=cfg["password"],
                 use_ssl=cfg["use_ssl"],
-                topic=cfg["topic"],
                 zigbee2mqtt_callback=zigbee2mqtt_callback,
-                zigbee2mqtt_topics=cfg["zigbee2mqtt_topics"],
                 broker_id=cfg["broker"],
-                mqtt_version=cfg.get("mqtt_version", 311),
+                mqtt_version=int(cfg.get("version", 311)),
             )
             self.clients.append(client)
             logger.info(f"[MQTT] Created client for broker: {cfg['broker']}:{cfg['port']}")
@@ -309,15 +347,12 @@ class MultiMQTTClient:
             except asyncio.CancelledError:
                 logger.info("[MQTT] MultiMQTTClient cancelled")
             return
-            
         async def run_single_client(client):
             try:
                 await client.run_forever()
             except Exception as e:
                 logger.error(f"[MQTT] Error in client {client._broker_id}: {e}")
                 raise
-        
-        # Use asyncio.gather instead of TaskGroup for broader compatibility
         try:
             await asyncio.gather(*[run_single_client(client) for client in self.clients])
         except asyncio.CancelledError:
@@ -342,3 +377,9 @@ class MultiMQTTClient:
         """Subscribe to a topic on all brokers."""
         for client in self.clients:
             await client.subscribe(topic, qos=qos)
+
+__all__ = [
+    "MQTTHandler",
+    "MQTTClient",
+    "MultiMQTTClient"
+]

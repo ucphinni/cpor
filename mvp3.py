@@ -17,7 +17,7 @@ from src.utils.logging import logger, setup_logger
 from src.config.settings import (
     NEST_CLIENT_ID, NEST_CLIENT_SECRET, NEST_REFRESH_TOKEN,
     NEST_PROJECT_ID, GCP_PROJECT_ID, PUBSUB_SUBSCRIPTION_ID,
-    validate_config, BROKER_CONFIGS
+    BROKER_CONFIGS
 )
 from src.auth.token_manager import TokenManager
 from src.database.operations import Database
@@ -123,8 +123,7 @@ async def run() -> None:
     logger.info("Starting MVP3 Nest controller...")
     
     try:
-        # Validate configuration
-        validate_config()
+        # Configuration is loaded from config.json; no validation needed
         
         # Initialize token manager
         token_manager = TokenManager(
